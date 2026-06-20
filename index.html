@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blixt</title>
+  <link rel="icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Blixt">
+  <meta name="theme-color" content="#0d0d1a">
+</head>
+<body>
+  <div id="map"></div>
+  <div id="status"></div>
+  <div id="map-controls">
+    <button id="wind-toggle" class="map-ctrl-btn">💨 Vind</button>
+    <button id="radar-toggle" class="map-ctrl-btn">🌧 Radar</button>
+  </div>
+  <div id="location"></div>
+  <div id="legend">
+    <div class="legend-source">
+      <div class="legend-source-label">⚡</div>
+      <div class="legend-bar" id="legend-bar-blitz"></div>
+    </div>
+    <div class="legend-source">
+      <div class="legend-source-label">SMHI</div>
+      <div class="legend-bar" id="legend-bar-smhi"></div>
+    </div>
+    <div id="legend-labels">
+      <span>Nu</span>
+      <span>1 tim</span>
+      <span>2 tim</span>
+      <span>3 tim</span>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      - strikes-data:/data
+    restart: unless-stopped
+
+volumes:
+  strikes-data:

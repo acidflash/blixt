@@ -1,0 +1,544 @@
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import 'leaflet-velocity/dist/leaflet-velocity.css'
+import 'leaflet-velocity'
+import './style.css'
+
+// --- Config ---
+const MAX_AGE_MS = 3 * 60 * 60 * 1000 // 3 timmar
+const UPDATE_INTERVAL_MS = 5_000
+const WS_URLS = [
+  'wss://ws1.blitzortung.org/',
+  'wss://ws2.blitzortung.org/',
+  'wss://ws7.blitzortung.org/',
+  'wss://ws8.blitzortung.org/',
+]
+
+// Blitzortung streams LZW-compressed JSON. This is their decode() verbatim.
+function lzwDecode(str) {
+  const chars = str.split('')
+  let prev = chars[0]
+  const result = [prev]
+  const dict = {}
+  let code = 256
+  for (let i = 1; i < chars.length; i++) {
+    const cc = chars[i].charCodeAt(0)
+    const entry = cc < 256 ? chars[i] : (dict[cc] ?? prev + prev[0])
+    result.push(entry)
+    dict[code++] = prev + entry[0]
+    prev = entry
+  }
+  return result.join('')
+}
+
+// Blitzortung: vit → gul → orange → röd → mörkröd
+const AGE_COLORS = [
+  { maxAge: 2 * 60_000,       fill: '#ffffff', stroke: '#ffe066' },
+  { maxAge: 15 * 60_000,      fill: '#ffee00', stroke: '#ffaa00' },
+  { maxAge: 60 * 60_000,      fill: '#ff8800', stroke: '#cc5500' },
+  { maxAge: 2 * 60 * 60_000,  fill: '#ff2200', stroke: '#aa1100' },
+  { maxAge: MAX_AGE_MS,       fill: '#660000', stroke: '#330000' },
+]
+
+// SMHI: cyan → blå → mörkblå
+const SMHI_AGE_COLORS = [
+  { maxAge: 2 * 60_000,       fill: '#aaf0ff', stroke: '#44bbdd' },
+  { maxAge: 15 * 60_000,      fill: '#44aaff', stroke: '#1166cc' },
+  { maxAge: 60 * 60_000,      fill: '#1166dd', stroke: '#0044aa' },
+  { maxAge: 2 * 60 * 60_000,  fill: '#0044aa', stroke: '#002266' },
+  { maxAge: MAX_AGE_MS,       fill: '#001e55', stroke: '#000d2a' },
+]
+
+// --- State ---
+let map
+let userMarker = null
+let userLat = null
+let userLon = null
+let strikes = [] // { lat, lon, timeMs, marker }
+let wsIndex = 0
+let ws = null
+let reconnectTimer = null
+
+const sourceState = {
+  blitzortung: 'connecting', // 'connecting' | 'live' | 'reconnecting'
+  smhi: 'idle',              // 'idle' | 'loading' | 'ok' | 'empty'
+  server: 'idle',            // 'idle' | 'ok' | 'error'
+}
+
+// --- Geo utils ---
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.asin(Math.sqrt(a))
+}
+
+function nearestKm() {
+  if (userLat === null || strikes.length === 0) return null
+  let min = Infinity
+  for (const s of strikes) {
+    const d = haversineKm(userLat, userLon, s.lat, s.lon)
+    if (d < min) min = d
+  }
+  return min
+}
+
+function updateLocationDisplay(lat, lon, accuracy) {
+  const latStr = lat.toFixed(5)
+  const lonStr = lon.toFixed(5)
+  const accStr = accuracy < 1000
+    ? `±${Math.round(accuracy)} m`
+    : `±${(accuracy / 1000).toFixed(1)} km`
+
+  const nearest = nearestKm()
+  const nearStr = nearest === null ? '' : nearest < 1
+    ? `  ·  närmaste ${Math.round(nearest * 1000)} m`
+    : `  ·  närmaste ${nearest.toFixed(1)} km`
+
+  const locEl = document.getElementById('location')
+  locEl.textContent = `${latStr}, ${lonStr}  ${accStr}${nearStr}`
+  locEl.style.display = 'block'
+}
+
+// --- Map ---
+function initMap() {
+  const renderer = L.canvas({ padding: 0.5 })
+
+  map = L.map('map', { zoomControl: true, renderer })
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  }).addTo(map)
+
+  map.setView([62, 15], 5) // Sweden as fallback
+
+  const LocControl = L.Control.extend({
+    onAdd() {
+      const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control-loc')
+      btn.title = 'Min position'
+      btn.innerHTML = '⊙'
+      L.DomEvent.on(btn, 'click', (e) => {
+        L.DomEvent.stop(e)
+        if (userLat !== null) map.setView([userLat, userLon], Math.max(map.getZoom(), 12))
+      })
+      return btn
+    },
+  })
+  new LocControl({ position: 'topleft' }).addTo(map)
+}
+
+// --- Geolocation ---
+function initGeolocation() {
+  if (!navigator.geolocation) {
+    setStatus('Geolocation saknas i webbläsaren')
+    return
+  }
+  navigator.geolocation.watchPosition(onPosition, onPositionError, {
+    enableHighAccuracy: true,
+    maximumAge: 10_000,
+  })
+}
+
+function onPosition({ coords }) {
+  const { latitude: lat, longitude: lon, accuracy } = coords
+  userLat = lat
+  userLon = lon
+
+  updateLocationDisplay(lat, lon, accuracy)
+
+  const popupHtml = `${lat.toFixed(5)}, ${lon.toFixed(5)}<br><small style="color:#888">±${Math.round(accuracy)} m</small>`
+
+  if (!userMarker) {
+    map.setView([lat, lon], 8)
+    userMarker = L.marker([lat, lon], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="user-pulse"></div>',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      }),
+      zIndexOffset: 1000,
+    }).addTo(map).bindPopup(popupHtml)
+  } else {
+    userMarker.setLatLng([lat, lon])
+    userMarker.setPopupContent(popupHtml)
+  }
+}
+
+function onPositionError(err) {
+  console.warn('Position error:', err.message)
+}
+
+// --- Blitzortung WebSocket ---
+function connect() {
+  sourceState.blitzortung = 'connecting'
+  renderStatus()
+
+  if (ws) {
+    ws.onclose = null
+    ws.close()
+  }
+
+  ws = new WebSocket(WS_URLS[wsIndex % WS_URLS.length])
+
+  ws.onopen = () => {
+    ws.send('{"a":111}')
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(lzwDecode(event.data))
+      if (typeof data.lat !== 'number' || typeof data.lon !== 'number') return
+      if (typeof data.latc === 'number') data.lat += data.latc
+      if (typeof data.lonc === 'number') data.lon += data.lonc
+      const timeMs = data.time ? data.time / 1e6 : Date.now()
+      sourceState.blitzortung = 'live'
+      addStrike(data.lat, data.lon, timeMs, true)
+      reportStrike(data.lat, data.lon, timeMs, {})
+    } catch {
+      // ignore malformed frames
+    }
+  }
+
+  ws.onerror = () => {
+    wsIndex++
+    scheduleReconnect()
+  }
+
+  ws.onclose = () => {
+    scheduleReconnect()
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return
+  sourceState.blitzortung = 'reconnecting'
+  renderStatus()
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    connect()
+  }, 3000)
+}
+
+// --- Strikes ---
+function strikeStyle(ageMs, meta = {}) {
+  const opacity = 1 - ageMs / MAX_AGE_MS
+  const palette = meta.source === 'smhi' ? SMHI_AGE_COLORS : AGE_COLORS
+  const bucket = palette.find(b => ageMs <= b.maxAge) ?? palette.at(-1)
+  return {
+    radius: 5,
+    fillColor: bucket.fill,
+    color: bucket.stroke,
+    weight: 1,
+    opacity,
+    fillOpacity: opacity * 0.85,
+  }
+}
+
+let saveTimer = null
+function scheduleSave() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveToStorage, 3_000)
+}
+
+function addRipple(lat, lon) {
+  const icon = L.divIcon({
+    className: '',
+    html: '<div class="strike-ring"></div>',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  })
+  const ring = L.marker([lat, lon], { icon, zIndexOffset: 500, interactive: false }).addTo(map)
+  setTimeout(() => map.removeLayer(ring), 1400)
+}
+
+function strikePopup(timeMs, meta = {}, lat, lon) {
+  const date = new Date(timeMs)
+  const dateStr = date.toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' })
+  const timeStr = date.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+  const distStr = (userLat !== null)
+    ? `<div>Avstånd: ${haversineKm(userLat, userLon, lat, lon).toFixed(1)} km</div>`
+    : ''
+
+  const coordStr = `<div>Lat: ${lat.toFixed(4)} Lon: ${lon.toFixed(4)}</div>`
+
+  let extraStr = ''
+  if (meta.source === 'smhi') {
+    if (meta.peakCurrent != null) extraStr += `<div>Toppström: ${meta.peakCurrent} kA</div>`
+    const type = meta.cloudIndicator === 0 ? 'Moln–mark' : 'Moln–moln'
+    extraStr += `<div>Typ: ${type}</div>`
+  }
+
+  const sourceLabel = meta.source === 'smhi' ? 'SMHI' : 'Blitzortung'
+  const sourceColor = meta.source === 'smhi' ? '#7ecaff' : '#ffdd88'
+
+  return `<div style="font-size:13px;line-height:1.7">
+    <div style="font-weight:600;margin-bottom:4px">Blixtnedslag ${dateStr} ${timeStr}</div>
+    ${distStr}${coordStr}${extraStr}<div style="color:${sourceColor}">Källa: ${sourceLabel}</div>
+  </div>`
+}
+
+function addStrike(lat, lon, timeMs, ripple = false, meta = {}) {
+  const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs, meta))
+    .bindPopup(() => strikePopup(timeMs, meta, lat, lon), { className: 'strike-popup' })
+    .addTo(map)
+  strikes.push({ lat, lon, timeMs, meta, marker })
+  if (ripple) addRipple(lat, lon)
+  scheduleSave()
+}
+
+function updateStrikes() {
+  const now = Date.now()
+  const kept = []
+
+  for (const strike of strikes) {
+    const age = now - strike.timeMs
+    if (age > MAX_AGE_MS) {
+      map.removeLayer(strike.marker)
+    } else {
+      strike.marker.setStyle(strikeStyle(age, strike.meta))
+      kept.push(strike)
+    }
+  }
+
+  strikes = kept
+  renderStatus()
+
+  if (userLat !== null) {
+    // Re-read accuracy from last known position — reuse existing display text for acc
+    const locEl = document.getElementById('location')
+    if (locEl.style.display !== 'none') {
+      const nearest = nearestKm()
+      const nearStr = nearest === null ? '' : nearest < 1
+        ? `  ·  närmaste ${Math.round(nearest * 1000)} m`
+        : `  ·  närmaste ${nearest.toFixed(1)} km`
+      // Replace only the nearest-part (after last "·" or append)
+      const base = locEl.textContent.replace(/\s+·\s+närmaste.*$/, '')
+      locEl.textContent = base + nearStr
+    }
+  }
+}
+
+// --- Status bar ---
+function renderStatus() {
+  const count = strikes.length
+  const countStr = count > 0
+    ? `${count} blixt${count !== 1 ? 'ar' : ''}`
+    : 'Inga blixtar'
+
+  const blitzLabel = {
+    connecting:   '⚡ Ansluter…',
+    live:         '⚡ Live',
+    reconnecting: '⚡ Återansluter…',
+  }[sourceState.blitzortung] ?? '⚡ ?'
+
+  const smhiLabel = {
+    idle:    '',
+    loading: '· SMHI laddas…',
+    ok:      '· SMHI ✓',
+    old:     '· SMHI (data >3h)',
+    empty:   '· SMHI (inga blixtar)',
+  }[sourceState.smhi] ?? ''
+
+  const serverLabel = {
+    idle:  '',
+    ok:    '· Server ✓',
+    error: '· Server ✗',
+  }[sourceState.server] ?? ''
+
+  const parts = [countStr, blitzLabel, smhiLabel, serverLabel]
+    .filter(Boolean)
+    .join('  ')
+
+  document.getElementById('status').textContent = parts
+}
+
+// --- Persistence ---
+const STORAGE_KEY = 'blixt_strikes'
+
+function saveToStorage() {
+  const now = Date.now()
+  const payload = strikes
+    .filter(s => now - s.timeMs < MAX_AGE_MS)
+    .map(({ lat, lon, timeMs, meta }) => ({ lat, lon, timeMs, ...(meta && Object.keys(meta).length ? { meta } : {}) }))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // storage full — silently skip
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const now = Date.now()
+    for (const { lat, lon, timeMs, meta } of JSON.parse(raw)) {
+      if (now - timeMs < MAX_AGE_MS) {
+        addStrike(lat, lon, timeMs, false, meta ?? {})
+      }
+    }
+  } catch {
+    // corrupted — ignore
+  }
+}
+
+// --- Server sync ---
+function reportStrike(lat, lon, timeMs, meta) {
+  fetch('/api/strikes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lat, lon, timeMs, meta }),
+  }).catch(() => {})
+}
+
+async function loadFromApi() {
+  try {
+    const res = await fetch('/api/strikes')
+    if (!res.ok) return
+    const data = await res.json()
+    const now = Date.now()
+    const existing = new Set(strikes.map(s => `${s.timeMs}:${s.lat}:${s.lon}`))
+    let added = 0
+    let smhiCount = 0
+    for (const { lat, lon, timeMs, meta } of data) {
+      if (now - timeMs > MAX_AGE_MS) continue
+      const key = `${timeMs}:${lat}:${lon}`
+      if (existing.has(key)) continue
+      existing.add(key)
+      addStrike(lat, lon, timeMs, false, meta ?? {})
+      if (meta?.source === 'smhi') smhiCount++
+      added++
+    }
+    sourceState.server = 'ok'
+    sourceState.smhi = smhiCount > 0 ? 'ok' : 'empty'
+    renderStatus()
+  } catch {
+    sourceState.server = 'error'
+    renderStatus()
+  }
+}
+
+// Re-poll server every 60s to pick up new SMHI strikes added server-side
+setInterval(loadFromApi, 60_000)
+
+// --- Rain radar (RainViewer) ---
+let radarLayer = null
+let radarVisible = true
+
+async function updateRadar() {
+  try {
+    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json')
+    const data = await res.json()
+    const frames = data.radar?.past
+    if (!frames?.length) return
+    const latest = frames[frames.length - 1]
+    const url = `${data.host}${latest.path}/256/{z}/{x}/{y}/6/1_1.png`
+    if (radarLayer) map.removeLayer(radarLayer)
+    radarLayer = L.tileLayer(url, { opacity: 0.5, zIndex: 200, minNativeZoom: 3, maxNativeZoom: 7, attribution: 'Rain: RainViewer' })
+    radarLayer.on('tileerror', (e) => {
+      e.tile.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+    })
+    if (radarVisible) radarLayer.addTo(map)
+  } catch {}
+}
+
+function toggleRadar() {
+  radarVisible = !radarVisible
+  const btn = document.getElementById('radar-toggle')
+  if (radarVisible) {
+    if (radarLayer) radarLayer.addTo(map)
+    btn.classList.add('active')
+  } else {
+    if (radarLayer) map.removeLayer(radarLayer)
+    btn.classList.remove('active')
+  }
+}
+
+// --- Wind (leaflet-velocity + Open-Meteo) ---
+// Grid: Northern Europe 72–48°N, -8–40°E, 4° step → 7×13 = 91 points
+const WIND_LA1 = 72, WIND_LA2 = 48
+const WIND_LO1 = -8, WIND_LO2 = 40
+const WIND_D = 4
+const WIND_NX = (WIND_LO2 - WIND_LO1) / WIND_D + 1
+const WIND_NY = (WIND_LA1 - WIND_LA2) / WIND_D + 1
+
+let windLayer = null
+let windVisible = true
+
+async function updateWind() {
+  const lats = [], lons = []
+  for (let lat = WIND_LA1; lat >= WIND_LA2; lat -= WIND_D) {
+    for (let lon = WIND_LO1; lon <= WIND_LO2; lon += WIND_D) {
+      lats.push(lat)
+      lons.push(lon)
+    }
+  }
+  try {
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1`
+    )
+    const results = await res.json()
+    const uData = [], vData = []
+    for (const r of results) {
+      const speed = r.current?.wind_speed_10m ?? 0
+      const dir = (r.current?.wind_direction_10m ?? 0) * Math.PI / 180
+      uData.push(-speed * Math.sin(dir))
+      vData.push(-speed * Math.cos(dir))
+    }
+    const refTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    const hdr = { parameterUnit: 'm.s-1', parameterCategory: 2, dx: WIND_D, dy: WIND_D, la1: WIND_LA1, la2: WIND_LA2, lo1: WIND_LO1, lo2: WIND_LO2, nx: WIND_NX, ny: WIND_NY, refTime }
+    const velData = [
+      { header: { ...hdr, parameterNumber: 2, parameterNumberName: 'eastward_wind' }, data: uData },
+      { header: { ...hdr, parameterNumber: 3, parameterNumberName: 'northward_wind' }, data: vData },
+    ]
+    if (windLayer) map.removeLayer(windLayer)
+    windLayer = L.velocityLayer({
+      displayValues: false,
+      data: velData,
+      maxVelocity: 25,
+      colorScale: ['rgba(255,255,255,0.3)', 'rgba(180,200,255,0.6)', 'rgba(100,140,255,0.85)', 'rgba(60,80,220,1)'],
+      opacity: 0.8,
+      lineWidth: 1.5,
+      particleAge: 90,
+      particleMultiplier: 0.003,
+    })
+    if (windVisible) windLayer.addTo(map)
+  } catch (e) {
+    console.warn('Wind fetch failed:', e)
+  }
+}
+
+function toggleWind() {
+  windVisible = !windVisible
+  const btn = document.getElementById('wind-toggle')
+  if (windVisible) {
+    if (windLayer) windLayer.addTo(map)
+    btn.classList.add('active')
+  } else {
+    if (windLayer) map.removeLayer(windLayer)
+    btn.classList.remove('active')
+  }
+}
+
+// --- Boot ---
+initMap()
+loadFromStorage()
+initGeolocation()
+connect()
+loadFromApi()
+updateRadar()
+updateWind()
+setInterval(updateStrikes, UPDATE_INTERVAL_MS)
+setInterval(updateRadar, 5 * 60_000)
+setInterval(updateWind, 10 * 60_000)
+window.addEventListener('beforeunload', saveToStorage)
+document.getElementById('radar-toggle').addEventListener('click', toggleRadar)
+document.getElementById('radar-toggle').classList.add('active')
+document.getElementById('wind-toggle').addEventListener('click', toggleWind)
+document.getElementById('wind-toggle').classList.add('active')

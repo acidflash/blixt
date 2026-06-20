@@ -1,0 +1,240 @@
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  background: #0d0d1a;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#map {
+  height: 100dvh;
+  width: 100vw;
+}
+
+#status {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 10, 26, 0.82);
+  color: #c8c8e0;
+  padding: 7px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  z-index: 1000;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+  transition: opacity 0.3s;
+}
+
+/* Map control buttons */
+#map-controls {
+  position: fixed;
+  bottom: 24px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.map-ctrl-btn {
+  background: rgba(10, 10, 26, 0.82);
+  color: #888;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.map-ctrl-btn.active {
+  color: #7ecaff;
+  border-color: rgba(126, 202, 255, 0.35);
+}
+
+/* Location display */
+#location {
+  position: fixed;
+  bottom: 24px;
+  left: 16px;
+  background: rgba(10, 10, 26, 0.82);
+  color: #c8c8e0;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  z-index: 1000;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: none;
+}
+
+/* Location control button */
+.leaflet-control-loc {
+  width: 30px;
+  height: 30px;
+  background: #2a2a3a;
+  color: #c8c8e0;
+  border: none;
+  font-size: 18px;
+  line-height: 30px;
+  text-align: center;
+  cursor: pointer;
+  display: block;
+}
+
+.leaflet-control-loc:hover {
+  background: #3a3a4a;
+  color: #fff;
+}
+
+/* Override Leaflet attribution to fit dark theme */
+.leaflet-control-attribution {
+  background: rgba(10, 10, 26, 0.7) !important;
+  color: #666 !important;
+  font-size: 10px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #888 !important;
+}
+
+/* Legend */
+#legend {
+  position: fixed;
+  top: 20px;
+  right: 16px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  z-index: 1000;
+  background: rgba(10, 10, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  backdrop-filter: blur(8px);
+}
+
+.legend-source {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-source-label {
+  font-size: 11px;
+  color: #888;
+  letter-spacing: 0.02em;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.legend-bar {
+  width: 14px;
+  flex: 1;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+#legend-bar-blitz {
+  background: linear-gradient(
+    to bottom,
+    #ffffff 0%,
+    #ffee00 15%,
+    #ff8800 40%,
+    #ff2200 70%,
+    #550000 100%
+  );
+}
+
+#legend-bar-smhi {
+  background: linear-gradient(
+    to bottom,
+    #aaf0ff 0%,
+    #44aaff 15%,
+    #1166dd 40%,
+    #0044aa 70%,
+    #001e55 100%
+  );
+}
+
+#legend-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #bbb;
+  line-height: 1;
+  user-select: none;
+  gap: 0;
+  padding-top: 22px;
+}
+
+/* Strike popup */
+.strike-popup .leaflet-popup-content-wrapper {
+  background: rgba(10, 10, 26, 0.92);
+  color: #e0e0f0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  backdrop-filter: blur(8px);
+}
+
+.strike-popup .leaflet-popup-tip {
+  background: rgba(10, 10, 26, 0.92);
+}
+
+.strike-popup .leaflet-popup-close-button {
+  color: #666;
+}
+
+/* Strike ripple ring */
+@keyframes ripple {
+  0%   { transform: scale(0.5); opacity: 0.9; }
+  100% { transform: scale(8);   opacity: 0; }
+}
+
+.strike-ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  animation: ripple 1.4s ease-out forwards;
+  pointer-events: none;
+}
+
+/* User position pulse ring */
+@keyframes pulse {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  70%  { transform: scale(2.5); opacity: 0; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+.user-pulse {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #4a9eff;
+  position: relative;
+}
+
+.user-pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #4a9eff;
+  animation: pulse 2s ease-out infinite;
+}
