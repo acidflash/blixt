@@ -86,16 +86,16 @@ function nearestKm() {
 }
 
 function updateLocationDisplay(lat, lon, accuracy) {
-  const latStr = lat.toFixed(5)
-  const lonStr = lon.toFixed(5)
+  const latStr = lat.toFixed(3)
+  const lonStr = lon.toFixed(3)
   const accStr = accuracy < 1000
     ? `±${Math.round(accuracy)} m`
     : `±${(accuracy / 1000).toFixed(1)} km`
 
   const nearest = nearestKm()
   const nearStr = nearest === null ? '' : nearest < 1
-    ? `  ·  närmaste ${Math.round(nearest * 1000)} m`
-    : `  ·  närmaste ${nearest.toFixed(1)} km`
+    ? `  ·  ⚡ ${Math.round(nearest * 1000)} m`
+    : `  ·  ⚡ ${nearest.toFixed(1)} km`
 
   const locEl = document.getElementById('location')
   locEl.textContent = `${latStr}, ${lonStr}  ${accStr}${nearStr}`
@@ -315,8 +315,8 @@ function updateStrikes() {
     if (locEl.style.display !== 'none') {
       const nearest = nearestKm()
       const nearStr = nearest === null ? '' : nearest < 1
-        ? `  ·  närmaste ${Math.round(nearest * 1000)} m`
-        : `  ·  närmaste ${nearest.toFixed(1)} km`
+        ? `  ·  ⚡ ${Math.round(nearest * 1000)} m`
+        : `  ·  ⚡ ${nearest.toFixed(1)} km`
       // Replace only the nearest-part (after last "·" or append)
       const base = locEl.textContent.replace(/\s+·\s+närmaste.*$/, '')
       locEl.textContent = base + nearStr
@@ -331,31 +331,39 @@ function renderStatus() {
     ? `${count} blixt${count !== 1 ? 'ar' : ''}`
     : 'Inga blixtar'
 
-  const blitzLabel = {
-    connecting:   '⚡ Ansluter…',
-    live:         '⚡ Live',
-    reconnecting: '⚡ Återansluter…',
-  }[sourceState.blitzortung] ?? '⚡ ?'
+  const blitzDot = {
+    connecting:   '<span style="color:#ffcc44">●</span>',
+    live:         '<span style="color:#44dd88">●</span>',
+    reconnecting: '<span style="color:#ff6644">●</span>',
+  }[sourceState.blitzortung] ?? ''
+
+  const blitzText = {
+    connecting:   'Ansluter…',
+    live:         'Live',
+    reconnecting: 'Återansluter…',
+  }[sourceState.blitzortung] ?? '?'
+
+  const blitzLabel = `${blitzDot} ⚡ ${blitzText}`
 
   const smhiLabel = {
     idle:    '',
-    loading: '· SMHI laddas…',
-    ok:      '· SMHI ✓',
-    old:     '· SMHI (data >3h)',
-    empty:   '· SMHI (inga blixtar)',
+    loading: '· <span style="color:#ffcc44">●</span> SMHI',
+    ok:      '· <span style="color:#44dd88">●</span> SMHI',
+    old:     '· SMHI (gammal data)',
+    empty:   '',
   }[sourceState.smhi] ?? ''
 
   const serverLabel = {
     idle:  '',
-    ok:    '· Server ✓',
-    error: '· Server ✗',
+    ok:    '',
+    error: '· <span style="color:#ff6644">●</span> Server borta',
   }[sourceState.server] ?? ''
 
   const parts = [countStr, blitzLabel, smhiLabel, serverLabel]
     .filter(Boolean)
     .join('  ')
 
-  document.getElementById('status').textContent = parts
+  document.getElementById('status').innerHTML = parts
 }
 
 // --- Persistence ---
