@@ -425,6 +425,53 @@ async function loadFromApi() {
 // Re-poll server every 60s to pick up new SMHI strikes added server-side
 setInterval(loadFromApi, 60_000)
 
+// --- SMHI client-side (works in dev; in prod supplements server polling) ---
+const SMHI_BASE = 'https://opendata-download-lightning.smhi.se/api/version/latest'
+const smhiSeen = new Set()
+
+async function loadSmhiData() {
+  sourceState.smhi = 'loading'
+  renderStatus()
+
+  const now = Date.now()
+  const cutoff = now - MAX_AGE_MS
+  const todayUtc = new Date(now)
+  const ydayUtc = new Date(Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate() - 1))
+
+  const days = [
+    { year: ydayUtc.getUTCFullYear(), month: ydayUtc.getUTCMonth() + 1, day: ydayUtc.getUTCDate() },
+    { year: todayUtc.getUTCFullYear(), month: todayUtc.getUTCMonth() + 1, day: todayUtc.getUTCDate() },
+  ]
+
+  let added = 0
+  for (const d of days) {
+    const m = String(d.month).padStart(2, '0')
+    const dd = String(d.day).padStart(2, '0')
+    let raw
+    try {
+      const res = await fetch(`${SMHI_BASE}/year/${d.year}/month/${m}/day/${dd}/data.json`)
+      if (!res.ok) continue
+      raw = (await res.json()).values ?? []
+    } catch { continue }
+
+    for (const s of raw) {
+      const timeMs = Date.UTC(s.year, s.month - 1, s.day, s.hours, s.minutes, s.seconds, Math.floor(s.nanoseconds / 1e6))
+      if (timeMs < cutoff) continue
+      const key = `${timeMs}:${s.lat}:${s.lon}`
+      if (smhiSeen.has(key)) continue
+      smhiSeen.add(key)
+      if (strikes.some(e => e.timeMs === timeMs && e.lat === s.lat && e.lon === s.lon)) continue
+      addStrike(s.lat, s.lon, timeMs, false, { source: 'smhi', cloudIndicator: s.cloudIndicator, peakCurrent: s.peakCurrent })
+      added++
+    }
+  }
+
+  if (sourceState.smhi === 'loading') {
+    sourceState.smhi = added > 0 ? 'ok' : 'empty'
+    renderStatus()
+  }
+}
+
 // --- Rain radar (RainViewer) ---
 let radarLayer = null
 let radarVisible = true
@@ -530,9 +577,11 @@ loadFromStorage()
 initGeolocation()
 connect()
 loadFromApi()
+loadSmhiData()
 updateRadar()
 updateWind()
 setInterval(updateStrikes, UPDATE_INTERVAL_MS)
+setInterval(loadSmhiData, 10 * 60_000)
 setInterval(updateRadar, 5 * 60_000)
 setInterval(updateWind, 10 * 60_000)
 window.addEventListener('beforeunload', saveToStorage)
