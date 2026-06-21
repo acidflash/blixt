@@ -61,26 +61,6 @@ html, body {
   border-color: rgba(126, 202, 255, 0.35);
 }
 
-/* Location display */
-#location {
-  position: fixed;
-  bottom: 24px;
-  left: 16px;
-  background: rgba(10, 10, 26, 0.82);
-  color: #c8c8e0;
-  padding: 7px 14px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  z-index: 1000;
-  pointer-events: none;
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: none;
-}
-
 /* Location control button */
 .leaflet-control-loc {
   width: 30px;

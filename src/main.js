@@ -76,22 +76,7 @@ function nearestKm() {
   return min
 }
 
-function updateLocationDisplay(lat, lon, accuracy) {
-  const latStr = lat.toFixed(3)
-  const lonStr = lon.toFixed(3)
-  const accStr = accuracy < 1000
-    ? `±${Math.round(accuracy)} m`
-    : `±${(accuracy / 1000).toFixed(1)} km`
-
-  const nearest = nearestKm()
-  const nearStr = nearest === null ? '' : nearest < 1
-    ? `  ·  ⚡ ${Math.round(nearest * 1000)} m`
-    : `  ·  ⚡ ${nearest.toFixed(1)} km`
-
-  const locEl = document.getElementById('location')
-  locEl.textContent = `${latStr}, ${lonStr}  ${accStr}${nearStr}`
-  locEl.style.display = 'block'
-}
+function updateLocationDisplay() {}
 
 // --- Map ---
 function initMap() {
@@ -347,19 +332,6 @@ function updateStrikes() {
   strikes = kept
   renderStatus()
 
-  if (userLat !== null) {
-    // Re-read accuracy from last known position — reuse existing display text for acc
-    const locEl = document.getElementById('location')
-    if (locEl.style.display !== 'none') {
-      const nearest = nearestKm()
-      const nearStr = nearest === null ? '' : nearest < 1
-        ? `  ·  ⚡ ${Math.round(nearest * 1000)} m`
-        : `  ·  ⚡ ${nearest.toFixed(1)} km`
-      // Replace only the nearest-part (after last "·" or append)
-      const base = locEl.textContent.replace(/\s+·\s+⚡.*$/, '')
-      locEl.textContent = base + nearStr
-    }
-  }
 }
 
 // --- Status bar ---
