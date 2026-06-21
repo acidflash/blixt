@@ -40,15 +40,6 @@ const AGE_COLORS = [
   { maxAge: MAX_AGE_MS,       fill: '#660000', stroke: '#330000' },
 ]
 
-// SMHI: cyan → blå → mörkblå
-const SMHI_AGE_COLORS = [
-  { maxAge: 2 * 60_000,       fill: '#aaf0ff', stroke: '#44bbdd' },
-  { maxAge: 15 * 60_000,      fill: '#44aaff', stroke: '#1166cc' },
-  { maxAge: 60 * 60_000,      fill: '#1166dd', stroke: '#0044aa' },
-  { maxAge: 2 * 60 * 60_000,  fill: '#0044aa', stroke: '#002266' },
-  { maxAge: MAX_AGE_MS,       fill: '#001e55', stroke: '#000d2a' },
-]
-
 // --- State ---
 let map
 let userMarker = null
@@ -225,10 +216,9 @@ function scheduleReconnect() {
 }
 
 // --- Strikes ---
-function strikeStyle(ageMs, meta = {}) {
+function strikeStyle(ageMs) {
   const opacity = 1 - ageMs / MAX_AGE_MS
-  const palette = meta.source === 'smhi' ? SMHI_AGE_COLORS : AGE_COLORS
-  const bucket = palette.find(b => ageMs <= b.maxAge) ?? palette.at(-1)
+  const bucket = AGE_COLORS.find(b => ageMs <= b.maxAge) ?? AGE_COLORS.at(-1)
   return {
     radius: 5,
     fillColor: bucket.fill,
@@ -284,7 +274,7 @@ function strikePopup(timeMs, meta = {}, lat, lon) {
 }
 
 function addStrike(lat, lon, timeMs, ripple = false, meta = {}) {
-  const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs, meta))
+  const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs))
     .bindPopup(() => strikePopup(timeMs, meta, lat, lon), { className: 'strike-popup' })
     .addTo(map)
   strikes.push({ lat, lon, timeMs, meta, marker })
@@ -301,7 +291,7 @@ function updateStrikes() {
     if (age > MAX_AGE_MS) {
       map.removeLayer(strike.marker)
     } else {
-      strike.marker.setStyle(strikeStyle(age, strike.meta))
+      strike.marker.setStyle(strikeStyle(age))
       kept.push(strike)
     }
   }

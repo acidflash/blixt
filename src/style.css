@@ -117,58 +117,34 @@ html, body {
   right: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   z-index: 1000;
-  background: rgba(10, 10, 26, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 12px 16px;
+  background: rgba(10, 10, 26, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 16px 20px;
   backdrop-filter: blur(8px);
 }
 
 .legend-title {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: #555;
+  color: #666;
   user-select: none;
 }
 
 .legend-body {
   display: flex;
   align-items: stretch;
-  gap: 10px;
-}
-
-.legend-source {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.legend-source-label {
-  font-size: 12px;
-  color: #aaa;
-  letter-spacing: 0.02em;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.legend-source-sub {
-  font-size: 9px;
-  color: #555;
-  letter-spacing: 0.02em;
-  user-select: none;
+  gap: 14px;
 }
 
 .legend-bar {
-  width: 18px;
-  flex: 1;
-  border-radius: 6px;
+  width: 28px;
+  border-radius: 8px;
   flex-shrink: 0;
-  margin-top: 4px;
 }
 
 #legend-bar-blitz {
@@ -182,27 +158,15 @@ html, body {
   );
 }
 
-#legend-bar-smhi {
-  background: linear-gradient(
-    to bottom,
-    #aaf0ff 0%,
-    #44aaff 15%,
-    #1166dd 40%,
-    #0044aa 70%,
-    #001e55 100%
-  );
-}
-
 #legend-labels {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  font-size: 12px;
-  color: #999;
+  font-size: 14px;
+  color: #bbb;
   line-height: 1;
   user-select: none;
-  gap: 0;
-  padding-top: 36px;
+  min-height: 110px;
 }
 
 /* Strike popup */
