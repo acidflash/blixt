@@ -97,7 +97,7 @@ function updateLocationDisplay(lat, lon, accuracy) {
 function initMap() {
   const renderer = L.canvas({ padding: 0.5 })
 
-  map = L.map('map', { zoomControl: true, renderer })
+  map = L.map('map', { zoomControl: true, renderer, minZoom: 3 })
 
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
