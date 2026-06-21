@@ -107,6 +107,9 @@ function initMap() {
 
   map.setView([62, 15], 5) // Sweden as fallback
 
+  map.createPane('windPane')
+  map.getPane('windPane').style.pointerEvents = 'none'
+
   const LocControl = L.Control.extend({
     onAdd() {
       const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control-loc')
@@ -582,6 +585,7 @@ async function updateWind() {
     if (windLayer) map.removeLayer(windLayer)
     windLayer = L.velocityLayer({
       displayValues: false,
+      pane: 'windPane',
       data: velData,
       maxVelocity: 25,
       colorScale: ['rgba(255,255,255,0.3)', 'rgba(180,200,255,0.6)', 'rgba(100,140,255,0.85)', 'rgba(60,80,220,1)'],
