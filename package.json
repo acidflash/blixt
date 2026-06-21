@@ -10,7 +10,8 @@
   "dependencies": {
     "express": "^5.2.1",
     "leaflet": "^1.9.4",
-    "leaflet-velocity": "^2.1.4"
+    "leaflet-velocity": "^2.1.4",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "sharp": "^0.35.2",

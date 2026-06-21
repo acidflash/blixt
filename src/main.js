@@ -164,8 +164,55 @@ function onPositionError(err) {
   console.warn('Position error:', err.message)
 }
 
-// --- Blitzortung WebSocket ---
-function connect() {
+// --- Server WebSocket (primär) ---
+function connectToServer() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const serverWs = new WebSocket(`${proto}://${location.host}/ws`)
+  let opened = false
+
+  serverWs.onopen = () => {
+    opened = true
+    sourceState.blitzortung = 'connecting'
+    renderStatus()
+  }
+
+  serverWs.onmessage = ({ data }) => {
+    try {
+      const msg = JSON.parse(data)
+      if (msg.type === 'history') {
+        sourceState.blitzortung = 'live'
+        const smhiInHistory = msg.strikes.some(s => s.meta?.source === 'smhi')
+        if (smhiInHistory) sourceState.smhi = 'ok'
+        renderStatus()
+        const existing = new Set(strikes.map(s => `${s.timeMs}:${s.lat}:${s.lon}`))
+        for (const { lat, lon, timeMs, meta } of msg.strikes) {
+          const key = `${timeMs}:${lat}:${lon}`
+          if (!existing.has(key)) { existing.add(key); addStrike(lat, lon, timeMs, false, meta ?? {}) }
+        }
+      } else if (msg.type === 'strike') {
+        sourceState.blitzortung = 'live'
+        if (msg.meta?.source === 'smhi') sourceState.smhi = 'ok'
+        addStrike(msg.lat, msg.lon, msg.timeMs, true, msg.meta ?? {})
+        renderStatus()
+      }
+    } catch {}
+  }
+
+  serverWs.onclose = () => {
+    if (opened) {
+      sourceState.blitzortung = 'reconnecting'
+      renderStatus()
+      setTimeout(connectToServer, 3000)
+    } else {
+      connectBlitzortung()
+    }
+  }
+
+  serverWs.onerror = () => {}
+}
+
+// --- Blitzortung direktanslutning (dev-fallback) ---
+function connectBlitzortung() {
   sourceState.blitzortung = 'connecting'
   renderStatus()
 
@@ -189,29 +236,27 @@ function connect() {
       const timeMs = data.time ? data.time / 1e6 : Date.now()
       sourceState.blitzortung = 'live'
       addStrike(data.lat, data.lon, timeMs, true)
-      reportStrike(data.lat, data.lon, timeMs, {})
-    } catch {
-      // ignore malformed frames
-    }
+      renderStatus()
+    } catch {}
   }
 
   ws.onerror = () => {
     wsIndex++
-    scheduleReconnect()
+    scheduleBlitzReconnect()
   }
 
   ws.onclose = () => {
-    scheduleReconnect()
+    scheduleBlitzReconnect()
   }
 }
 
-function scheduleReconnect() {
+function scheduleBlitzReconnect() {
   if (reconnectTimer) return
   sourceState.blitzortung = 'reconnecting'
   renderStatus()
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
-    connect()
+    connectBlitzortung()
   }, 3000)
 }
 
@@ -387,14 +432,6 @@ function loadFromStorage() {
 }
 
 // --- Server sync ---
-function reportStrike(lat, lon, timeMs, meta) {
-  fetch('/api/strikes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lat, lon, timeMs, meta }),
-  }).catch(() => {})
-}
-
 async function loadFromApi() {
   try {
     const res = await fetch('/api/strikes')
@@ -575,7 +612,7 @@ function toggleWind() {
 initMap()
 loadFromStorage()
 initGeolocation()
-connect()
+connectToServer()
 loadFromApi()
 loadSmhiData()
 updateRadar()
