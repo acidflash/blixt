@@ -168,6 +168,11 @@ html, body {
   color: #666;
 }
 
+/* Vindlagret ska inte fånga musklick */
+canvas.velocity-overlay {
+  pointer-events: none !important;
+}
+
 /* Strike ripple ring */
 @keyframes ripple {
   0%   { transform: scale(0.5); opacity: 0.9; }
