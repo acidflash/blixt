@@ -356,7 +356,7 @@ function updateStrikes() {
         ? `  ·  ⚡ ${Math.round(nearest * 1000)} m`
         : `  ·  ⚡ ${nearest.toFixed(1)} km`
       // Replace only the nearest-part (after last "·" or append)
-      const base = locEl.textContent.replace(/\s+·\s+närmaste.*$/, '')
+      const base = locEl.textContent.replace(/\s+·\s+⚡.*$/, '')
       locEl.textContent = base + nearStr
     }
   }

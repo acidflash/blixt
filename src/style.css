@@ -73,6 +73,7 @@ html, body {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+  white-space: nowrap;
   z-index: 1000;
   pointer-events: none;
   backdrop-filter: blur(8px);
