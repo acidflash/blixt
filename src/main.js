@@ -457,11 +457,9 @@ async function loadSmhiData() {
 
   let added = 0
   for (const d of days) {
-    const m = String(d.month).padStart(2, '0')
-    const dd = String(d.day).padStart(2, '0')
     let raw
     try {
-      const res = await fetch(`${SMHI_BASE}/year/${d.year}/month/${m}/day/${dd}/data.json`)
+      const res = await fetch(`${SMHI_BASE}/year/${d.year}/month/${d.month}/day/${d.day}/data.json`)
       if (!res.ok) continue
       raw = (await res.json()).values ?? []
     } catch { continue }
