@@ -61,6 +61,51 @@ html, body {
   border-color: rgba(126, 202, 255, 0.35);
 }
 
+/* Map layer selector */
+.layer-select-wrap {
+  position: relative;
+}
+
+.layer-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(10, 10, 26, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 8px;
+  backdrop-filter: blur(8px);
+}
+
+.layer-menu.hidden {
+  display: none;
+}
+
+.layer-option {
+  background: transparent;
+  color: #888;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: color 0.2s, background 0.2s;
+}
+
+.layer-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ccc;
+}
+
+.layer-option.active {
+  color: #7ecaff;
+}
+
 /* Location control button */
 .leaflet-control-loc {
   width: 30px;

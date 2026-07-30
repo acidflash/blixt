@@ -78,17 +78,57 @@ function nearestKm() {
 
 function updateLocationDisplay() {}
 
+// --- Map layers ---
+const MAP_LAYERS = {
+  dark: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  },
+  light: {
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  },
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri',
+    maxZoom: 19,
+    maxNativeZoom: 17,
+  },
+  osm: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors',
+    subdomains: 'abc',
+    maxZoom: 19,
+  },
+}
+const MAP_LAYER_KEY = 'blixt_maplayer'
+let baseLayer = null
+
+function setMapLayer(id) {
+  const def = MAP_LAYERS[id] ? id : 'dark'
+  const layer = MAP_LAYERS[def]
+  if (baseLayer) map.removeLayer(baseLayer)
+  const opts = { attribution: layer.attribution, maxZoom: layer.maxZoom }
+  if (layer.subdomains) opts.subdomains = layer.subdomains
+  if (layer.maxNativeZoom) opts.maxNativeZoom = layer.maxNativeZoom
+  baseLayer = L.tileLayer(layer.url, opts).addTo(map)
+  localStorage.setItem(MAP_LAYER_KEY, def)
+  document.querySelectorAll('.layer-option').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.layer === def)
+  })
+}
+
 // --- Map ---
 function initMap() {
   const renderer = L.canvas({ padding: 0.5 })
 
   map = L.map('map', { zoomControl: true, renderer, minZoom: 3 })
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-    subdomains: 'abcd',
-    maxZoom: 20,
-  }).addTo(map)
+  setMapLayer(localStorage.getItem(MAP_LAYER_KEY) || 'dark')
 
   map.setView([62, 15], 5) // Sweden as fallback
 
@@ -582,6 +622,69 @@ function toggleWind() {
   }
 }
 
+// --- Wildfires (NASA FIRMS via server proxy) ---
+let fireLayer = null
+let firesVisible = true
+
+function fireStyle(f) {
+  const hot = f.confidence === 'h' || f.confidence === '100' || Number(f.confidence) >= 80
+  return {
+    radius: Math.min(4 + Math.sqrt(f.frp || 1), 12),
+    fillColor: hot ? '#ff4400' : '#ff8800',
+    color: '#fff2cc',
+    weight: 1,
+    opacity: 0.9,
+    fillOpacity: 0.7,
+  }
+}
+
+function firePopup(f) {
+  const confLabel = { l: 'Låg', n: 'Normal', h: 'Hög' }[f.confidence] ?? f.confidence
+  const hhmm = f.acqTime.padStart(4, '0')
+  const acqDateMs = Date.parse(`${f.acqDate}T${hhmm.slice(0, 2)}:${hhmm.slice(2)}:00Z`)
+  const dateStr = new Date(acqDateMs).toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' })
+  const timeStr = new Date(acqDateMs).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+  const distStr = (userLat !== null)
+    ? `<div>Avstånd: ${haversineKm(userLat, userLon, f.lat, f.lon).toFixed(1)} km</div>`
+    : ''
+  return `<div style="font-size:13px;line-height:1.7">
+    <div style="font-weight:600;margin-bottom:4px">🔥 Markbrand ${dateStr} ${timeStr}</div>
+    ${distStr}<div>Lat: ${f.lat.toFixed(4)} Lon: ${f.lon.toFixed(4)}</div>
+    <div>Styrka (FRP): ${f.frp} MW</div>
+    <div>Konfidens: ${confLabel}</div>
+    <div style="color:#ffb366">Källa: NASA FIRMS (${f.satellite})</div>
+  </div>`
+}
+
+async function updateFires() {
+  try {
+    const res = await fetch('/api/fires')
+    if (!res.ok) return
+    const data = await res.json()
+    if (fireLayer) map.removeLayer(fireLayer)
+    // No explicit renderer — shares the map's default canvas with strikes so hit-testing
+    // (and thus click-through) works correctly instead of a private canvas blocking clicks.
+    fireLayer = L.layerGroup(
+      data.map((f) => L.circleMarker([f.lat, f.lon], fireStyle(f)).bindPopup(() => firePopup(f), { className: 'strike-popup' }))
+    )
+    if (firesVisible) fireLayer.addTo(map)
+  } catch (e) {
+    console.warn('Fires fetch failed:', e)
+  }
+}
+
+function toggleFires() {
+  firesVisible = !firesVisible
+  const btn = document.getElementById('fires-toggle')
+  if (firesVisible) {
+    if (fireLayer) fireLayer.addTo(map)
+    btn.classList.add('active')
+  } else {
+    if (fireLayer) map.removeLayer(fireLayer)
+    btn.classList.remove('active')
+  }
+}
+
 // --- Boot ---
 initMap()
 loadFromStorage()
@@ -591,12 +694,30 @@ loadFromApi()
 loadSmhiData()
 updateRadar()
 updateWind()
+updateFires()
 setInterval(updateStrikes, UPDATE_INTERVAL_MS)
 setInterval(loadSmhiData, 10 * 60_000)
 setInterval(updateRadar, 5 * 60_000)
 setInterval(updateWind, 10 * 60_000)
+setInterval(updateFires, 15 * 60_000)
 window.addEventListener('beforeunload', saveToStorage)
 document.getElementById('radar-toggle').addEventListener('click', toggleRadar)
 document.getElementById('radar-toggle').classList.add('active')
 document.getElementById('wind-toggle').addEventListener('click', toggleWind)
 document.getElementById('wind-toggle').classList.add('active')
+document.getElementById('fires-toggle').addEventListener('click', toggleFires)
+document.getElementById('fires-toggle').classList.add('active')
+document.getElementById('layer-toggle').addEventListener('click', (e) => {
+  e.stopPropagation()
+  document.getElementById('layer-menu').classList.toggle('hidden')
+})
+document.querySelectorAll('.layer-option').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    setMapLayer(btn.dataset.layer)
+    document.getElementById('layer-menu').classList.add('hidden')
+  })
+})
+document.addEventListener('click', (e) => {
+  const wrap = document.querySelector('.layer-select-wrap')
+  if (!wrap.contains(e.target)) document.getElementById('layer-menu').classList.add('hidden')
+})

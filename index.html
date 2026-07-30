@@ -16,8 +16,18 @@
   <div id="map"></div>
   <div id="status"></div>
   <div id="map-controls">
+    <div class="layer-select-wrap">
+      <button id="layer-toggle" class="map-ctrl-btn">🗺 Karta</button>
+      <div id="layer-menu" class="layer-menu hidden">
+        <button class="layer-option" data-layer="dark">Mörk</button>
+        <button class="layer-option" data-layer="light">Ljus</button>
+        <button class="layer-option" data-layer="satellite">Satellit</button>
+        <button class="layer-option" data-layer="osm">Standard</button>
+      </div>
+    </div>
     <button id="wind-toggle" class="map-ctrl-btn">💨 Vind</button>
     <button id="radar-toggle" class="map-ctrl-btn">🌧 Radar</button>
+    <button id="fires-toggle" class="map-ctrl-btn">🔥 Bränder</button>
   </div>
   <div id="legend">
     <div class="legend-title">Blixtar · ålder</div>
