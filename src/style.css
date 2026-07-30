@@ -41,7 +41,7 @@ html, body {
   right: 16px;
   display: flex;
   gap: 8px;
-  z-index: 1000;
+  z-index: 1001; /* above #legend so the layer-menu popup isn't hidden underneath it on mobile */
 }
 
 .map-ctrl-btn {
@@ -255,4 +255,75 @@ canvas.velocity-overlay {
   border-radius: 50%;
   background: #4a9eff;
   animation: pulse 2s ease-out infinite;
+}
+
+/* Mobile layout: controls row wraps instead of overflowing off-screen,
+   status pill moves to top so it can't hide behind the (now taller) controls,
+   legend shrinks so it doesn't dominate a small viewport. */
+@media (max-width: 600px) {
+  #status {
+    top: 12px;
+    bottom: auto;
+    left: 56px;
+    right: 12px;
+    transform: none;
+    max-width: none;
+    white-space: normal;
+    text-align: center;
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+
+  #legend {
+    top: auto;
+    bottom: 12px;
+    left: 12px;
+    right: auto;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .legend-title {
+    font-size: 10px;
+  }
+
+  .legend-bar {
+    width: 18px;
+  }
+
+  #legend-labels {
+    font-size: 12px;
+    min-height: 80px;
+  }
+
+  #map-controls {
+    left: 8px;
+    right: 8px;
+    bottom: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .map-ctrl-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .layer-menu {
+    right: 0;
+    left: auto;
+  }
+}
+
+/* Very narrow phones: icon-only buttons so the whole row stays on one line
+   instead of wrapping and colliding with the legend. */
+@media (max-width: 340px) {
+  .map-ctrl-btn {
+    padding: 6px 9px;
+  }
+
+  .btn-label {
+    display: none;
+  }
 }
