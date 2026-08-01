@@ -90,7 +90,7 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 ### Wind
 
 - **leaflet-velocity** + **Open-Meteo** (both free, no API key)
-- Fetches current wind speed + direction for a 7×13 grid (4° step, 72–48°N, -8–40°E = 91 points) in one Open-Meteo request
+- Fetches current wind speed + direction for a **global grid** (4° step, 90–-90°N, -180–180°E = 4186 points), fetched in chunks of 500 (Open-Meteo caps coordinates/request) and reassembled in row-major order
 - Converts meteorological wind direction to U/V components: `U = -speed * sin(dir)`, `V = -speed * cos(dir)`
 - Builds leaflet-velocity data structure (two arrays: `eastward_wind` + `northward_wind`) and adds animated particle layer
 - Refreshed every 10 minutes via `updateWind()`

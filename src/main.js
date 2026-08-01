@@ -561,36 +561,66 @@ function toggleRadar() {
 }
 
 // --- Wind (leaflet-velocity + Open-Meteo) ---
-// Grid: Northern Europe 72–48°N, -8–40°E, 4° step → 7×13 = 91 points
-const WIND_LA1 = 72, WIND_LA2 = 48
-const WIND_LO1 = -8, WIND_LO2 = 40
+// Grid: globalt 90–-90°N, -180–180°E, 4° steg → 46×91 = 4186 punkter.
+// Open-Meteo begränsar antalet koordinater per anrop, så gridden hämtas i
+// chunkar (WIND_CHUNK punkter/request) och sätts ihop i rad-major ordning.
+const WIND_LA1 = 90, WIND_LA2 = -90
+const WIND_LO1 = -180, WIND_LO2 = 180
 const WIND_D = 4
-const WIND_NX = (WIND_LO2 - WIND_LO1) / WIND_D + 1
-const WIND_NY = (WIND_LA1 - WIND_LA2) / WIND_D + 1
+const WIND_NX = Math.round((WIND_LO2 - WIND_LO1) / WIND_D) + 1
+const WIND_NY = Math.round((WIND_LA1 - WIND_LA2) / WIND_D) + 1
+const WIND_POINTS = WIND_NX * WIND_NY
+const WIND_CHUNK = 500
 
 let windLayer = null
 let windVisible = true
 
+async function fetchWindChunk(chunk) {
+  const lats = chunk.map(p => p[0]).join(',')
+  const lons = chunk.map(p => p[1]).join(',')
+  const res = await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1`
+  )
+  if (!res.ok) throw new Error('Open-Meteo HTTP ' + res.status)
+  const json = await res.json()
+  // Multi-location svarar med en array av resultat (ett per koordinat, i begärd ordning).
+  return Array.isArray(json) ? json : (json.results ?? [json])
+}
+
 async function updateWind() {
-  const lats = [], lons = []
+  // Bygg gridden i rad-major ordning: alla longituder för varje latitud (norr→söder).
+  const points = []
   for (let lat = WIND_LA1; lat >= WIND_LA2; lat -= WIND_D) {
     for (let lon = WIND_LO1; lon <= WIND_LO2; lon += WIND_D) {
-      lats.push(lat)
-      lons.push(lon)
+      points.push([lat, lon])
     }
   }
+
+  const speeds = new Array(WIND_POINTS)
+  const dirs = new Array(WIND_POINTS)
   try {
-    const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1`
-    )
-    const results = await res.json()
-    const uData = [], vData = []
-    for (const r of results) {
-      const speed = r.current?.wind_speed_10m ?? 0
-      const dir = (r.current?.wind_direction_10m ?? 0) * Math.PI / 180
-      uData.push(-speed * Math.sin(dir))
-      vData.push(-speed * Math.cos(dir))
+    const tasks = []
+    for (let i = 0; i < WIND_POINTS; i += WIND_CHUNK) {
+      tasks.push(fetchWindChunk(points.slice(i, i + WIND_CHUNK)))
     }
+    const chunks = await Promise.all(tasks)
+
+    let idx = 0
+    for (const data of chunks) {
+      for (const r of data) {
+        speeds[idx] = r.current?.wind_speed_10m ?? 0
+        dirs[idx] = (r.current?.wind_direction_10m ?? 0) * Math.PI / 180
+        idx++
+      }
+    }
+
+    const uData = new Array(WIND_POINTS)
+    const vData = new Array(WIND_POINTS)
+    for (let i = 0; i < WIND_POINTS; i++) {
+      uData[i] = -speeds[i] * Math.sin(dirs[i])
+      vData[i] = -speeds[i] * Math.cos(dirs[i])
+    }
+
     const refTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
     const hdr = { parameterUnit: 'm.s-1', parameterCategory: 2, dx: WIND_D, dy: WIND_D, la1: WIND_LA1, la2: WIND_LA2, lo1: WIND_LO1, lo2: WIND_LO2, nx: WIND_NX, ny: WIND_NY, refTime }
     const velData = [
