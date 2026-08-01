@@ -40,7 +40,7 @@ Single-page Vite + vanilla JS app with no framework. All client logic lives in `
 Express app that runs in production (port 80):
 - `GET /api/strikes` — returns all strikes from the last 3 hours (in-memory, cleaned up on each request)
 - `POST /api/strikes` — adds a strike `{ lat, lon, timeMs, meta }`, deduplicates by exact match
-- Persists to `/data/strikes.json` every 60 seconds and on `SIGTERM`
+- Persists to `/data/strikes.json` every 60 seconds and on `SIGTERM` (path override via `DATA_FILE` env for non-Docker dev)
 - `/data` is a Docker named volume (`strikes-data`) so history survives container restarts
 
 ### Strike lifecycle

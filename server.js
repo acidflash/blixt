@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 const app = express()
 const httpServer = createServer(app)
 const PORT = process.env.PORT ?? 80
-const DATA_FILE = '/data/strikes.json'
+const DATA_FILE = process.env.DATA_FILE ?? '/data/strikes.json'
 const MAX_AGE_MS = 3 * 60 * 60 * 1000
 const SMHI_BASE = 'https://opendata-download-lightning.smhi.se/api/version/latest'
 const FIRMS_MAP_KEY = process.env.FIRMS_MAP_KEY
@@ -34,7 +34,7 @@ function cleanup() {
 function save() {
   cleanup()
   try {
-    mkdirSync('/data', { recursive: true })
+    mkdirSync(dirname(DATA_FILE), { recursive: true })
     writeFileSync(DATA_FILE, JSON.stringify(strikes))
   } catch (e) {
     console.error('Save error:', e.message)

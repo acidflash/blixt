@@ -167,6 +167,21 @@ html, body {
   gap: 14px;
 }
 
+.legend-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-bar-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #888;
+  user-select: none;
+}
+
 .legend-bar {
   width: 28px;
   border-radius: 8px;
@@ -181,6 +196,17 @@ html, body {
     #ff8800 40%,
     #ff2200 70%,
     #550000 100%
+  );
+}
+
+#legend-bar-smhi {
+  background: linear-gradient(
+    to bottom,
+    #55ffff 0%,
+    #00ccff 18%,
+    #0088ff 45%,
+    #0055cc 72%,
+    #002266 100%
   );
 }
 

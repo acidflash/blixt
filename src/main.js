@@ -40,6 +40,15 @@ const AGE_COLORS = [
   { maxAge: MAX_AGE_MS,       fill: '#660000', stroke: '#330000' },
 ]
 
+// SMHI (historiskt): cyan → blå → mörkblå
+const SMHI_AGE_COLORS = [
+  { maxAge: 2 * 60_000,       fill: '#55ffff', stroke: '#00ccff' },
+  { maxAge: 15 * 60_000,      fill: '#00ccff', stroke: '#0088ff' },
+  { maxAge: 60 * 60_000,      fill: '#0088ff', stroke: '#0055cc' },
+  { maxAge: 2 * 60 * 60_000,  fill: '#0055cc', stroke: '#003399' },
+  { maxAge: MAX_AGE_MS,       fill: '#002266', stroke: '#001133' },
+]
+
 // --- State ---
 let map
 let userMarker = null
@@ -75,8 +84,6 @@ function nearestKm() {
   }
   return min
 }
-
-function updateLocationDisplay() {}
 
 // --- Map layers ---
 const MAP_LAYERS = {
@@ -166,8 +173,6 @@ function onPosition({ coords }) {
   const { latitude: lat, longitude: lon, accuracy } = coords
   userLat = lat
   userLon = lon
-
-  updateLocationDisplay(lat, lon, accuracy)
 
   const popupHtml = `${lat.toFixed(5)}, ${lon.toFixed(5)}<br><small style="color:#888">±${Math.round(accuracy)} m</small>`
 
@@ -289,9 +294,10 @@ function scheduleBlitzReconnect() {
 }
 
 // --- Strikes ---
-function strikeStyle(ageMs) {
+function strikeStyle(ageMs, meta) {
+  const palette = meta?.source === 'smhi' ? SMHI_AGE_COLORS : AGE_COLORS
   const opacity = 1 - ageMs / MAX_AGE_MS
-  const bucket = AGE_COLORS.find(b => ageMs <= b.maxAge) ?? AGE_COLORS.at(-1)
+  const bucket = palette.find(b => ageMs <= b.maxAge) ?? palette.at(-1)
   return {
     radius: 5,
     fillColor: bucket.fill,
@@ -347,7 +353,7 @@ function strikePopup(timeMs, meta = {}, lat, lon) {
 }
 
 function addStrike(lat, lon, timeMs, ripple = false, meta = {}) {
-  const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs))
+  const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs, meta))
     .bindPopup(() => strikePopup(timeMs, meta, lat, lon), { className: 'strike-popup' })
     .addTo(map)
   strikes.push({ lat, lon, timeMs, meta, marker })
@@ -364,7 +370,7 @@ function updateStrikes() {
     if (age > MAX_AGE_MS) {
       map.removeLayer(strike.marker)
     } else {
-      strike.marker.setStyle(strikeStyle(age))
+      strike.marker.setStyle(strikeStyle(age, strike.meta))
       kept.push(strike)
     }
   }
@@ -399,7 +405,6 @@ function renderStatus() {
     idle:    '',
     loading: '· <span style="color:#ffcc44">●</span> SMHI',
     ok:      '· <span style="color:#44dd88">●</span> SMHI',
-    old:     '· SMHI (gammal data)',
     empty:   '',
   }[sourceState.smhi] ?? ''
 
