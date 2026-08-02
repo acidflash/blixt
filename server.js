@@ -3,7 +3,7 @@ import { createServer } from 'http'
 import { WebSocketServer, WebSocket as NodeWS } from 'ws'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'fs'
 
 const app = express()
 const httpServer = createServer(app)
@@ -14,6 +14,58 @@ const SMHI_BASE = 'https://opendata-download-lightning.smhi.se/api/version/lates
 const FIRMS_MAP_KEY = process.env.FIRMS_MAP_KEY
 const FIRMS_SOURCE = 'VIIRS_SNPP_NRT'
 const FIRMS_AREA = '-180,-90,180,90' // world
+
+// --- Access log + besöksstatistik ---
+// Loggfil + besökarantal sparas i samma /data-volym som strikes.json så de
+// överlever omstart. En "besökare" räknas per unikt IP som hämtar /
+// (index.html) — inte varje asset/API-anrop.
+const ACCESS_LOG_FILE = process.env.ACCESS_LOG_FILE ?? join(dirname(DATA_FILE), 'access.log')
+const VISITORS_FILE = process.env.VISITORS_FILE ?? join(dirname(DATA_FILE), 'visitors.json')
+
+const todayKey = () => new Date().toISOString().slice(0, 10) // YYYY-MM-DD (UTC)
+
+let visitorHistory = {} // { 'YYYY-MM-DD': antal unika besökare }
+try {
+  visitorHistory = JSON.parse(readFileSync(VISITORS_FILE, 'utf8'))
+} catch {}
+
+let visitorsDate = todayKey()
+let visitorsToday = new Set()
+
+function saveVisitors() {
+  try {
+    mkdirSync(dirname(VISITORS_FILE), { recursive: true })
+    writeFileSync(VISITORS_FILE, JSON.stringify({ ...visitorHistory, [visitorsDate]: visitorsToday.size }))
+  } catch (e) {
+    console.error('Visitor save error:', e.message)
+  }
+}
+
+app.use((req, res, next) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip
+  const today = todayKey()
+  if (today !== visitorsDate) {
+    visitorHistory[visitorsDate] = visitorsToday.size
+    visitorsDate = today
+    visitorsToday = new Set()
+  }
+  if (req.path === '/' || req.path === '/index.html') visitorsToday.add(ip)
+
+  res.on('finish', () => {
+    const line = `${new Date().toISOString()} ${ip} ${req.method} ${req.originalUrl} ${res.statusCode}\n`
+    try {
+      mkdirSync(dirname(ACCESS_LOG_FILE), { recursive: true })
+      appendFileSync(ACCESS_LOG_FILE, line)
+    } catch (e) {
+      console.error('Access log error:', e.message)
+    }
+  })
+  next()
+})
+
+app.get('/api/stats', (_req, res) => {
+  res.json({ date: visitorsDate, visitorsToday: visitorsToday.size, history: visitorHistory })
+})
 
 app.use(express.json({ limit: '2mb' }))
 app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), 'dist')))
@@ -329,6 +381,7 @@ setInterval(pollSmhi, 60_000)
 setInterval(pollFires, 30 * 60_000)
 setInterval(pollBrandrisk, 30 * 60_000)
 setInterval(save, 60_000)
-process.on('SIGTERM', () => { save(); process.exit(0) })
+setInterval(saveVisitors, 60_000)
+process.on('SIGTERM', () => { save(); saveVisitors(); process.exit(0) })
 
 httpServer.listen(PORT, () => console.log(`Blixt på :${PORT}`))

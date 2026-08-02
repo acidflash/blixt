@@ -43,6 +43,13 @@ Express app that runs in production (port 80):
 - Persists to `/data/strikes.json` every 60 seconds and on `SIGTERM` (path override via `DATA_FILE` env for non-Docker dev)
 - `/data` is a Docker named volume (`strikes-data`) so history survives container restarts
 
+### Access log + besöksstatistik
+
+- Middleware (registered before `express.json`/`express.static`) logs every request to `/data/access.log` (`ACCESS_LOG_FILE` env override): `ISO-timestamp ip method path status`, one line per request, append-only (no rotation).
+- "Besökare" = unikt IP (från `X-Forwarded-For` om satt, annars `req.ip`) som hämtar `/` eller `/index.html` — inte varje asset/API-anrop. Räknas per UTC-dag i `visitorsToday` (in-memory `Set`).
+- `GET /api/stats` → `{ date, visitorsToday, history: { 'YYYY-MM-DD': count } }`.
+- Persisteras till `/data/visitors.json` (`VISITORS_FILE` env override) var 60:e sekund och på `SIGTERM`, samma mönster som strikes. **Känd begränsning:** bara dagens *antal* persisteras, inte IP-listan — en omstart mitt på dagen nollställer `visitorsToday` till 0 och tappar dedupering mot besökare från innan omstarten (historiken för tidigare dagar påverkas inte).
+
 ### Strike lifecycle
 
 - Strikes kept for **3 hours** (`MAX_AGE_MS`), removed server-side and client-side after
