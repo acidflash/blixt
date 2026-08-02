@@ -239,12 +239,95 @@ app.get('/api/fires', (_req, res) => {
   res.json(fires)
 })
 
+// --- Brandrisk (SMHI fwif-prognos via proxy) ---
+// Hämtar brandriskprognosen som ett rutnät av punkter över Sverige från SMHI:s
+// öppna prognos-API (metfcst, kategori "fwif1g" = Fire Weather Index / brandrisk).
+// Verifierat mot https://opendata.smhi.se/metfcst/fwif/introduction (2026-08-02).
+// Katsa/version/period konfigurerbara via env så de kan justeras mot
+// nuvarande SMHI-definition utan kodändring.
+const BRANDRISK_CATEGORY = process.env.BRANDRISK_CATEGORY ?? 'fwif1g'
+const BRANDRISK_VERSION = process.env.BRANDRISK_VERSION ?? '1'
+const BRANDRISK_PERIOD = process.env.BRANDRISK_PERIOD ?? 'hourly' // 'hourly' | 'daily'
+const BRANDRISK_BASE = `https://opendata-download-metfcst.smhi.se/api/category/${BRANDRISK_CATEGORY}/version/${BRANDRISK_VERSION}/${BRANDRISK_PERIOD}`
+// Rutnät över Sverige
+const BR_LAT_MIN = 55, BR_LAT_MAX = 69.5
+const BR_LON_MIN = 10, BR_LON_MAX = 24.5
+const BR_STEP = 0.8
+const BR_CONCURRENCY = 8
+
+let brandrisk = [] // { lat, lon, validTime, approvedTime, values }
+let brandriskUpdated = null
+
+// Välj den tidpunkt i prognosen som ligger närmast "nu".
+function pickTimeStep(timeSeries, nowMs) {
+  let best = timeSeries.length - 1
+  let bestDiff = Infinity
+  for (let i = 0; i < timeSeries.length; i++) {
+    const t = Date.parse(timeSeries[i].validTime)
+    if (Number.isNaN(t)) continue
+    const d = Math.abs(t - nowMs)
+    if (d < bestDiff) { bestDiff = d; best = i }
+  }
+  return timeSeries[best]
+}
+
+async function fetchBrandriskPoint(lat, lon) {
+  const res = await fetch(`${BRANDRISK_BASE}/geotype/point/lon/${lon}/lat/${lat}/data.json`)
+  if (!res.ok) throw new Error('HTTP ' + res.status)
+  const json = await res.json()
+  const ts = json.timeSeries
+  if (!Array.isArray(ts) || !ts.length) return null
+  const step = pickTimeStep(ts, Date.now())
+  const param = step.parameters?.find(p => p.name === 'fwiindex')
+  const fwiindex = Array.isArray(param?.values) ? param.values.at(-1) : param?.values
+  if (typeof fwiindex !== 'number' || fwiindex === 9999) return null // saknas / utanför SMHI:s prognosområde
+  return { lat, lon, validTime: step.validTime, approvedTime: json.approvedTime, fwiindex }
+}
+
+async function pollBrandrisk() {
+  const pts = []
+  for (let lat = BR_LAT_MAX; lat >= BR_LAT_MIN; lat -= BR_STEP) {
+    for (let lon = BR_LON_MIN; lon <= BR_LON_MAX; lon += BR_STEP) {
+      pts.push([Math.round(lat * 10) / 10, Math.round(lon * 10) / 10])
+    }
+  }
+
+  const out = []
+  let idx = 0
+  const workers = Array.from({ length: BR_CONCURRENCY }, async () => {
+    while (true) {
+      const i = idx++
+      if (i >= pts.length) break
+      const [la, lo] = pts[i]
+      try {
+        const r = await fetchBrandriskPoint(la, lo)
+        if (r) out.push(r)
+      } catch { /* punktfel ignoreras */ }
+    }
+  })
+  await Promise.all(workers)
+
+  if (out.length) {
+    brandrisk = out
+    brandriskUpdated = new Date().toISOString()
+    console.log(`[Brandrisk] ${out.length}/${pts.length} punkter (SMHI ${BRANDRISK_CATEGORY} v${BRANDRISK_VERSION})`)
+  } else {
+    console.warn('[Brandrisk] inga punkter hämtades – SMHI otillgänglig? Data kvar: ' + brandrisk.length)
+  }
+}
+
+app.get('/api/brandrisk', (_req, res) => {
+  res.json({ updated: brandriskUpdated, validTime: brandrisk[0]?.validTime ?? null, points: brandrisk })
+})
+
 // --- Boot ---
 connectBlitzortung()
 pollSmhi()
 pollFires()
+pollBrandrisk()
 setInterval(pollSmhi, 60_000)
 setInterval(pollFires, 30 * 60_000)
+setInterval(pollBrandrisk, 30 * 60_000)
 setInterval(save, 60_000)
 process.on('SIGTERM', () => { save(); process.exit(0) })
 

@@ -142,6 +142,11 @@ function initMap() {
   map.createPane('windPane')
   map.getPane('windPane').style.pointerEvents = 'none'
 
+  map.createPane('brandriskPane')
+  map.getPane('brandriskPane').style.zIndex = 350 // ovanför tiles/radar, under blixtar/bränder
+  map.getPane('brandriskPane').style.pointerEvents = 'none' // rent dekorativt, blockerar inte klick
+  brandriskRenderer = L.canvas({ pane: 'brandriskPane', padding: 0.5 })
+
   const LocControl = L.Control.extend({
     onAdd() {
       const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control-loc')
@@ -720,6 +725,100 @@ function toggleFires() {
   }
 }
 
+// --- Brandrisk (SMHI via serverproxy /api/brandrisk) ---
+// SMHI:s brandriskprognos (fwif1g) levereras som ett rutnät av punkter över
+// Sverige. Risknivån anges av parametern "fwiindex": heltal 1–6 (klass),
+// eller -1 = data saknas/utanför säsong. Se
+// https://opendata.smhi.se/metfcst/fwif/parameters (verifierat 2026-08-02).
+const BRANDRISK_COLORS = ['#3fa34d', '#8fbf3f', '#ffce00', '#f28f3b', '#e5484d', '#8b0000']
+const BRANDRISK_LABELS = ['Mycket liten risk', 'Liten risk', 'Måttlig risk', 'Stor risk', 'Mycket stor risk', 'Extremt stor risk']
+// Servergridden har 0.8° steg (~55-90 km beroende på breddgrad). Radien är satt
+// så grannpunkter överlappar och tonas ihop via blur-filtret på panen — samma
+// "molnigt" utseende som regnradarlagret, i stället för diskreta prickar.
+const BRANDRISK_RADIUS_M = 60_000
+
+let brandriskLayer = null
+let brandriskVisible = false // avstängt som standard tills data finns tillgänglig
+let brandriskRenderer = null
+
+function brandriskStep(point) {
+  const v = point.fwiindex
+  if (typeof v !== 'number' || v === -1) return -1 // data saknas/utanför säsong
+  return Math.max(0, Math.min(Math.round(v) - 1, BRANDRISK_COLORS.length - 1))
+}
+
+// Molnigt bakgrundslager: stora överlappande cirklar, rent dekorativa (klick
+// går rakt igenom till punkt-lagret nedan).
+function brandriskCloudStyle(point) {
+  const step = brandriskStep(point)
+  return {
+    renderer: brandriskRenderer,
+    radius: BRANDRISK_RADIUS_M,
+    fillColor: BRANDRISK_COLORS[step],
+    stroke: false,
+    fillOpacity: 0.5,
+    interactive: false,
+  }
+}
+
+// Klickbara punkter ovanpå molnet — samma delade renderer som blixtar/bränder,
+// så klick/popup fungerar exakt som innan.
+function brandriskDotStyle(point) {
+  const step = brandriskStep(point)
+  return {
+    radius: 5,
+    fillColor: BRANDRISK_COLORS[step],
+    color: '#111',
+    weight: 0.6,
+    fillOpacity: 0.85,
+  }
+}
+
+function brandriskPopup(point) {
+  const step = brandriskStep(point)
+  const riskLine = step >= 0
+    ? `<div>Risknivå: <b>${BRANDRISK_LABELS[step]}</b></div>`
+    : '<div style="color:#888">Ingen riskdata på denna punkt</div>'
+  const valid = point.validTime ? ` (${new Date(point.validTime).toLocaleString('sv-SE')})` : ''
+  return `<div style="font-size:13px;line-height:1.7">
+    <div style="font-weight:600;margin-bottom:4px">⚠️ Brandrisk ${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}</div>
+    ${riskLine}
+    <div style="color:#ffb366">Källa: SMHI brandriskprognos${valid}</div>
+  </div>`
+}
+
+async function updateBrandrisk() {
+  try {
+    const res = await fetch('/api/brandrisk')
+    if (!res.ok) return
+    const data = await res.json()
+    const points = (data?.points ?? []).filter((p) => brandriskStep(p) >= 0)
+    if (brandriskLayer) map.removeLayer(brandriskLayer)
+    const clouds = points.map((p) => L.circle([p.lat, p.lon], brandriskCloudStyle(p)))
+    const dots = points.map((p) => L.circleMarker([p.lat, p.lon], brandriskDotStyle(p))
+      .bindPopup(() => brandriskPopup(p), { className: 'strike-popup' }))
+    brandriskLayer = L.layerGroup([...clouds, ...dots])
+    if (brandriskVisible) brandriskLayer.addTo(map)
+  } catch (e) {
+    console.warn('Brandrisk fetch failed:', e)
+  }
+}
+
+function toggleBrandrisk() {
+  brandriskVisible = !brandriskVisible
+  const btn = document.getElementById('brandrisk-toggle')
+  const legend = document.getElementById('brandrisk-legend')
+  if (brandriskVisible) {
+    if (brandriskLayer) brandriskLayer.addTo(map)
+    btn.classList.add('active')
+    if (legend) legend.classList.remove('hidden')
+  } else {
+    if (brandriskLayer) map.removeLayer(brandriskLayer)
+    btn.classList.remove('active')
+    if (legend) legend.classList.add('hidden')
+  }
+}
+
 // --- Boot ---
 initMap()
 loadFromStorage()
@@ -730,11 +829,13 @@ loadSmhiData()
 updateRadar()
 updateWind()
 updateFires()
+updateBrandrisk()
 setInterval(updateStrikes, UPDATE_INTERVAL_MS)
 setInterval(loadSmhiData, 10 * 60_000)
 setInterval(updateRadar, 5 * 60_000)
 setInterval(updateWind, 10 * 60_000)
 setInterval(updateFires, 15 * 60_000)
+setInterval(updateBrandrisk, 30 * 60_000)
 window.addEventListener('beforeunload', saveToStorage)
 document.getElementById('radar-toggle').addEventListener('click', toggleRadar)
 document.getElementById('radar-toggle').classList.add('active')
@@ -742,6 +843,7 @@ document.getElementById('wind-toggle').addEventListener('click', toggleWind)
 document.getElementById('wind-toggle').classList.add('active')
 document.getElementById('fires-toggle').addEventListener('click', toggleFires)
 document.getElementById('fires-toggle').classList.add('active')
+document.getElementById('brandrisk-toggle').addEventListener('click', toggleBrandrisk)
 document.getElementById('layer-toggle').addEventListener('click', (e) => {
   e.stopPropagation()
   document.getElementById('layer-menu').classList.toggle('hidden')

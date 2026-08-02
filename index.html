@@ -28,6 +28,7 @@
     <button id="wind-toggle" class="map-ctrl-btn">💨 <span class="btn-label">Vind</span></button>
     <button id="radar-toggle" class="map-ctrl-btn">🌧 <span class="btn-label">Radar</span></button>
     <button id="fires-toggle" class="map-ctrl-btn">🔥 <span class="btn-label">Bränder</span></button>
+    <button id="brandrisk-toggle" class="map-ctrl-btn">⚠️ <span class="btn-label">Brandrisk</span></button>
   </div>
   <div id="legend">
     <div class="legend-title">Blixtar · ålder</div>
@@ -45,6 +46,18 @@
         <span>1 tim</span>
         <span>2 tim</span>
         <span>3 tim</span>
+      </div>
+    </div>
+    <div id="brandrisk-legend" class="legend-section hidden">
+      <div class="legend-title">Brandrisk · SMHI</div>
+      <div id="legend-bar-brandrisk"></div>
+      <div class="brandrisk-legend-labels">
+        <span title="Mycket liten risk">1</span>
+        <span title="Liten risk">2</span>
+        <span title="Måttlig risk">3</span>
+        <span title="Stor risk">4</span>
+        <span title="Mycket stor risk">5</span>
+        <span title="Extremt stor risk">6</span>
       </div>
     </div>
   </div>

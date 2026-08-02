@@ -221,6 +221,41 @@ html, body {
   min-height: 110px;
 }
 
+/* Brandrisk-legend (döljs/visas med knappen) */
+.legend-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.legend-section.hidden {
+  display: none;
+}
+
+#legend-bar-brandrisk {
+  width: 170px;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    to right,
+    #3fa34d 0%,
+    #8fbf3f 20%,
+    #ffce00 40%,
+    #f28f3b 60%,
+    #e5484d 80%,
+    #8b0000 100%
+  );
+}
+
+.brandrisk-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #bbb;
+  user-select: none;
+}
+
 /* Strike popup */
 .strike-popup .leaflet-popup-content-wrapper {
   background: rgba(10, 10, 26, 0.92);
@@ -237,6 +272,12 @@ html, body {
 
 .strike-popup .leaflet-popup-close-button {
   color: #666;
+}
+
+/* Brandrisk-lagret: överlappande cirklar + blur ger ett "molnigt" utseende
+   likt regnradarn, i stället för diskreta prickar. */
+.leaflet-brandrisk-pane {
+  filter: blur(9px);
 }
 
 /* Vindlagret ska inte fånga musklick */

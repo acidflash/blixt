@@ -97,6 +97,15 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 - `leaflet-velocity` attaches to the global `L` via its UMD bundle — imported as a static side-effect (`import 'leaflet-velocity'`) after Leaflet; Vite deduplicates the leaflet module so `L.velocityLayer` lands on our instance
 - **Do not use top-level `await import('leaflet-velocity')`** — the PWA build target (ES2020) does not support top-level await
 
+### Brandrisk (SMHI fwif1g-prognos via serverproxy)
+
+- **server.js** hämtar SMHI-brandriskprognosen som ett rutnät av punkter över Sverige (lat 55–69.5, lon 10–24.5, steg 0.8°) med 8 samtidiga förfrågningar.
+- Endpoint: `https://opendata-download-metfcst.smhi.se/api/category/{category}/version/{version}/{period}/geotype/point/lon/{lon}/lat/{lat}/data.json` — kategori/version/period konfigurerbara via env (`BRANDRISK_CATEGORY` default `fwif1g`, `BRANDRISK_VERSION` default `1`, `BRANDRISK_PERIOD` default `hourly`). Verifierat mot https://opendata.smhi.se/metfcst/fwif/ (2026-08-02) — kräver `{period}` (`hourly`/`daily`) i sökvägen, saknas i SMHI:s äldre dokumenterade format.
+- Enda relevanta parametern är `fwiindex`: SMHI:s officiella 1–6-klass (se `/metfcst/fwif/parameters`). `-1` = data saknas/utanför säsong, `9999` = fyllnadsvärde för gridpunkter utanför prognosområdet (~63 % av rutnätet, mest hav/fjäll) — filtreras bort server-side i `fetchBrandriskPoint`. Server cachear och exponerar `GET /api/brandrisk` → `{ updated, validTime, points: [{ lat, lon, validTime, fwiindex }] }`.
+- **main.js** renderar två lager i `brandriskLayer`: ett dekorativt "molnigt" bakgrundslager (stora överlappande `L.circle`, egen `brandriskPane`/renderer, `pointer-events: none` + `interactive: false`, CSS `blur(9px)` på panen så grannpunkter tonas ihop likt regnradarn) och små klickbara `L.circleMarker`-prickar ovanpå på den delade standard-renderern (samma klick/popup-mekanik som blixtar/bränder). 6-stegs färgskala `BRANDRISK_COLORS`/`BRANDRISK_LABELS` matchar SMHI:s `fwiindex`-klasser.
+- Knapp `⚠️ Brandrisk` i `#map-controls` + egen legend (`#brandrisk-legend`, 1–6) som visas/döljs med lagret. Avstängt som standard.
+- Uppdateras var 30:e minut.
+
 ### Map control buttons
 
 - Both "💨 Vind" and "🌧 Radar" live in `#map-controls` (flex row, bottom-right)
