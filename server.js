@@ -372,11 +372,109 @@ app.get('/api/brandrisk', (_req, res) => {
   res.json({ updated: brandriskUpdated, validTime: brandrisk[0]?.validTime ?? null, points: brandrisk })
 })
 
+// --- Wind (Open-Meteo via proxy) ---
+// Open-Meteos gratistier har tre travande gränser: ~600 "location calls"/minut,
+// 5 000/timme, och — den som faktiskt styr här — bara 10 000/dygn. Det gamla
+// klient-side upplägget hämtade en global 4°-grid (4186 punkter) i 9 parallella
+// anrop PER BESÖKARE, vilket small i minutgränsen direkt (HTTP 429). Men även
+// om man löser det (hämta en gång server-side åt alla klienter i stället) hade
+// ett 4°-grid uppdaterat var 10:e minut krävt ~600 000 anrop/dygn — 60x över
+// dygnsbudgeten. Så gridden är därför nedskalad till 6° (1891 punkter) och
+// uppdateras var 6:e timme (4 ggr/dygn ≈ 7 564 anrop/dygn, ~76 % av budgeten,
+// marginal kvar för omstarter/dubbelkörningar). Inom varje körning hämtas
+// punkterna sekventiellt i små chunkar med paus mellan, så att inte heller
+// minut- eller timgränsen träffas.
+const WIND_LA1 = 90, WIND_LA2 = -90
+const WIND_LO1 = -180, WIND_LO2 = 180
+const WIND_D = 6
+const WIND_NX = Math.round((WIND_LO2 - WIND_LO1) / WIND_D) + 1
+const WIND_NY = Math.round((WIND_LA1 - WIND_LA2) / WIND_D) + 1
+const WIND_POINTS = WIND_NX * WIND_NY
+const WIND_CHUNK = 200
+const WIND_CHUNK_DELAY_MS = 3000
+
+let windData = null // leaflet-velocity-formaterad data (två headers + arrays)
+let windUpdated = null
+
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+async function fetchWindChunk(chunk) {
+  const lats = chunk.map(p => p[0]).join(',')
+  const lons = chunk.map(p => p[1]).join(',')
+  const res = await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1`
+  )
+  if (!res.ok) throw new Error('Open-Meteo HTTP ' + res.status)
+  const json = await res.json()
+  return Array.isArray(json) ? json : (json.results ?? [json])
+}
+
+async function pollWind() {
+  const points = []
+  for (let lat = WIND_LA1; lat >= WIND_LA2; lat -= WIND_D) {
+    for (let lon = WIND_LO1; lon <= WIND_LO2; lon += WIND_D) {
+      points.push([lat, lon])
+    }
+  }
+
+  const speeds = new Array(WIND_POINTS)
+  const dirs = new Array(WIND_POINTS)
+  try {
+    let idx = 0
+    for (let i = 0; i < WIND_POINTS; i += WIND_CHUNK) {
+      const data = await fetchWindChunk(points.slice(i, i + WIND_CHUNK))
+      for (const r of data) {
+        speeds[idx] = r.current?.wind_speed_10m ?? 0
+        dirs[idx] = (r.current?.wind_direction_10m ?? 0) * Math.PI / 180
+        idx++
+      }
+      if (i + WIND_CHUNK < WIND_POINTS) await sleep(WIND_CHUNK_DELAY_MS)
+    }
+
+    const uData = new Array(WIND_POINTS)
+    const vData = new Array(WIND_POINTS)
+    for (let i = 0; i < WIND_POINTS; i++) {
+      uData[i] = -speeds[i] * Math.sin(dirs[i])
+      vData[i] = -speeds[i] * Math.cos(dirs[i])
+    }
+
+    const refTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    const hdr = { parameterUnit: 'm.s-1', parameterCategory: 2, dx: WIND_D, dy: WIND_D, la1: WIND_LA1, la2: WIND_LA2, lo1: WIND_LO1, lo2: WIND_LO2, nx: WIND_NX, ny: WIND_NY, refTime }
+    windData = [
+      { header: { ...hdr, parameterNumber: 2, parameterNumberName: 'eastward_wind' }, data: uData },
+      { header: { ...hdr, parameterNumber: 3, parameterNumberName: 'northward_wind' }, data: vData },
+    ]
+    windUpdated = new Date().toISOString()
+    console.log(`[Wind] ${WIND_POINTS} punkter hämtade (Open-Meteo)`)
+    return true
+  } catch (e) {
+    console.warn('[Wind] hämtning misslyckades, behåller tidigare data:', e.message)
+    return false
+  }
+}
+
+// Självschemalagd i stället för setInterval: vid fel (t.ex. Open-Meteos
+// kvot inte återställd än) försöks igen efter en kort stund i stället för
+// att vänta hela 6-timmarscykeln — annars kan en enda misslyckad körning
+// lämna vindlagret tomt i timmar. En enstaka extra retry var 15:e minut
+// påverkar inte dygnsbudgeten nämnvärt.
+const WIND_INTERVAL_MS = 6 * 60 * 60_000
+const WIND_RETRY_MS = 15 * 60_000
+async function scheduleWind() {
+  const ok = await pollWind()
+  setTimeout(scheduleWind, ok ? WIND_INTERVAL_MS : WIND_RETRY_MS)
+}
+
+app.get('/api/wind', (_req, res) => {
+  res.json({ updated: windUpdated, data: windData })
+})
+
 // --- Boot ---
 connectBlitzortung()
 pollSmhi()
 pollFires()
 pollBrandrisk()
+scheduleWind()
 setInterval(pollSmhi, 60_000)
 setInterval(pollFires, 30 * 60_000)
 setInterval(pollBrandrisk, 30 * 60_000)

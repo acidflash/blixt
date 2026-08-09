@@ -94,13 +94,14 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 - **RainViewer's hash-based path format (`/v2/radar/{hash}`) only has tiles at zoom 3–7.** Zoom 8+ returns a 1370-byte "Zoom level not supported" error image (200 OK, not an HTTP error, so `tileerror` cannot catch it). Fix: `minNativeZoom: 3, maxNativeZoom: 7` — Leaflet upscales zoom-7 tiles when zoomed in further.
 - Refreshed every 5 minutes via `updateRadar()`
 
-### Wind
+### Wind (Open-Meteo via serverproxy)
 
 - **leaflet-velocity** + **Open-Meteo** (both free, no API key)
-- Fetches current wind speed + direction for a **global grid** (4° step, 90–-90°N, -180–180°E = 4186 points), fetched in chunks of 500 (Open-Meteo caps coordinates/request) and reassembled in row-major order
-- Converts meteorological wind direction to U/V components: `U = -speed * sin(dir)`, `V = -speed * cos(dir)`
-- Builds leaflet-velocity data structure (two arrays: `eastward_wind` + `northward_wind`) and adds animated particle layer
-- Refreshed every 10 minutes via `updateWind()`
+- **server.js** hämtar vinddata (nuvarande hastighet + riktning) för en **global grid** (6° steg, 90–-90°N, -180–180°E = 1891 punkter) och cachear resultatet; klienten hämtar bara `GET /api/wind`.
+- **Varför serverproxy + nedskalad grid:** Open-Meteos gratistier har tre travande gränser — ~600 anrop/minut, 5 000/timme, och (den som faktiskt styr här) bara **10 000/dygn**, där varje efterfrågad koordinat räknas som ett anrop. Ursprungsimplementationen hämtade en global 4°-grid (4186 punkter) client-side i 9 parallella 500-punkters-anrop **per besökare**, var 10:e minut — det small i minutgränsen direkt (HTTP 429 "Minutely API request limit exceeded"), och även om man löser burst-problemet hade 4°/10 min krävt ~600 000 anrop/dygn, 60x över dygnsbudgeten. Nu hämtar servern i stället gridden **en gång åt alla klienter**, nedskalad till 6° (1891 punkter), var 6:e timme (≈7 564 anrop/dygn, ~76 % av budgeten). Inom varje körning hämtas punkterna sekventiellt i chunkar (`WIND_CHUNK` = 200 punkter) med paus (`WIND_CHUNK_DELAY_MS` = 3s) mellan varje, så minut-/timgränsen inte heller triggas. Vid fel behålls föregående cachade data (samma mönster som brandrisk).
+- Konverterar meteorologisk vindriktning till U/V-komponenter server-side: `U = -speed * sin(dir)`, `V = -speed * cos(dir)`
+- Servern bygger leaflet-velocity-datastrukturen (två headers + arrays: `eastward_wind` + `northward_wind`) och exponerar den direkt via `GET /api/wind` → `{ updated, data }`; klienten skickar `data` oförändrad till `L.velocityLayer`.
+- Uppdateras var 6:e timme server-side, men självschemalagt (`scheduleWind` → rekursiv `setTimeout`, inte `setInterval`): vid misslyckad hämtning (t.ex. kvoten inte återställd) körs nästa försök redan efter 15 min (`WIND_RETRY_MS`) i stället för att vänta hela 6-timmarscykeln — annars kan en enda misslyckad körning lämna vindlagret tomt i timmar. Klienten pollar `/api/wind` var 10:e minut via `updateWind()` (billigt — träffar bara den egna servern, inte Open-Meteo).
 - `leaflet-velocity` attaches to the global `L` via its UMD bundle — imported as a static side-effect (`import 'leaflet-velocity'`) after Leaflet; Vite deduplicates the leaflet module so `L.velocityLayer` lands on our instance
 - **Do not use top-level `await import('leaflet-velocity')`** — the PWA build target (ES2020) does not support top-level await
 
@@ -115,9 +116,9 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 
 ### Map control buttons
 
-- Both "💨 Vind" and "🌧 Radar" live in `#map-controls` (flex row, bottom-right)
+- "💨 Vind", "🌧 Radar", "🔥 Bränder" and "⚠️ Brandrisk" live in `#map-controls` (flex row, bottom-right)
 - Shared class `.map-ctrl-btn`; `.active` = blue highlight
-- Both default to active/visible on load
+- Only "🌧 Radar" defaults to active/visible on load — Vind, Bränder and Brandrisk default off (each is either a heavier fetch — global grid for vind — or less central to the core lightning use case) and must be toggled on manually
 
 ### Other features
 
