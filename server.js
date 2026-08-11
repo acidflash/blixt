@@ -374,19 +374,25 @@ app.get('/api/brandrisk', (_req, res) => {
 
 // --- Wind (Open-Meteo via proxy) ---
 // Open-Meteos gratistier har tre travande gränser: ~600 "location calls"/minut,
-// 5 000/timme, och — den som faktiskt styr här — bara 10 000/dygn. Det gamla
+// 5 000/timme, och — den som faktiskt styr här — bara 10 000/dygn, DELAD per
+// käll-IP mellan allt som anropar Open-Meteo från den IP:n. Det gamla
 // klient-side upplägget hämtade en global 4°-grid (4186 punkter) i 9 parallella
-// anrop PER BESÖKARE, vilket small i minutgränsen direkt (HTTP 429). Men även
-// om man löser det (hämta en gång server-side åt alla klienter i stället) hade
-// ett 4°-grid uppdaterat var 10:e minut krävt ~600 000 anrop/dygn — 60x över
-// dygnsbudgeten. Så gridden är därför nedskalad till 6° (1891 punkter) och
-// uppdateras var 6:e timme (4 ggr/dygn ≈ 7 564 anrop/dygn, ~76 % av budgeten,
-// marginal kvar för omstarter/dubbelkörningar). Inom varje körning hämtas
-// punkterna sekventiellt i små chunkar med paus mellan, så att inte heller
-// minut- eller timgränsen träffas.
-const WIND_LA1 = 90, WIND_LA2 = -90
-const WIND_LO1 = -180, WIND_LO2 = 180
-const WIND_D = 6
+// anrop PER BESÖKARE, vilket small i minutgränsen direkt (HTTP 429). Ett
+// server-side 6°-grid (1891 punkter, var 6:e timme ≈ 7 564 anrop/dygn) löste
+// burst-problemet men åt ändå 76 % av HELA dygnsbudgeten på egen hand — noll
+// marginal för omförsök, och en enda misslyckad körning + 15-min-retry räckte
+// för att permanent trigga "Daily API request limit exceeded" (verifierat
+// 2026-08-11: `curl` mot Open-Meteo gav 429 med den texten direkt, oavsett
+// vad servern gjorde). Gridden är därför skalad ner till Skandinavien i
+// stället för hela jorden (samma bbox som brandrisk) — 900 punkter × 4
+// körningar/dygn ≈ 3 600 anrop/dygn, 36 % av budgeten, med gott om marginal
+// för omförsök. Ger dessutom bättre lokal upplösning (0,5°) än det gamla
+// 6°-globala rutnätet. Inom varje körning hämtas punkterna sekventiellt i
+// små chunkar med paus mellan, så att inte heller minut- eller timgränsen
+// träffas.
+const WIND_LA1 = 69.5, WIND_LA2 = 55
+const WIND_LO1 = 10, WIND_LO2 = 24.5
+const WIND_D = 0.5
 const WIND_NX = Math.round((WIND_LO2 - WIND_LO1) / WIND_D) + 1
 const WIND_NY = Math.round((WIND_LA1 - WIND_LA2) / WIND_D) + 1
 const WIND_POINTS = WIND_NX * WIND_NY
