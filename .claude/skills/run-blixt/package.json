@@ -1,0 +1,9 @@
+{
+  "name": "run-blixt-driver",
+  "private": true,
+  "type": "module",
+  "description": "Headless-browser driver for the run-blixt skill. Not part of the blixt app itself.",
+  "dependencies": {
+    "playwright-core": "^1.60.0"
+  }
+}
