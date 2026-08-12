@@ -119,7 +119,7 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 
 - "💨 Vind", "🌧 Radar", "🔥 Bränder" and "⚠️ Brandrisk" live in `#map-controls` (flex row, bottom-right)
 - Shared class `.map-ctrl-btn`; `.active` = blue highlight
-- Only "🌧 Radar" defaults to active/visible on load — Vind, Bränder and Brandrisk default off (each is either a heavier fetch — global grid for vind — or less central to the core lightning use case) and must be toggled on manually
+- "🌧 Radar" and "💨 Vind" default to active/visible on load — Bränder and Brandrisk default off (less central to the core lightning use case) and must be toggled on manually
 
 ### Other features
 

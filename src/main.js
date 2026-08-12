@@ -570,7 +570,7 @@ function toggleRadar() {
 // stället för att varje besökare gör samma hämtning själv (se pollWind i
 // server.js, som äger grid-bbox/upplösning och uppdateringsintervall).
 let windLayer = null
-let windVisible = false
+let windVisible = true
 
 async function updateWind() {
   try {
@@ -786,6 +786,7 @@ window.addEventListener('beforeunload', saveToStorage)
 document.getElementById('radar-toggle').addEventListener('click', toggleRadar)
 document.getElementById('radar-toggle').classList.add('active')
 document.getElementById('wind-toggle').addEventListener('click', toggleWind)
+document.getElementById('wind-toggle').classList.add('active')
 document.getElementById('fires-toggle').addEventListener('click', toggleFires)
 document.getElementById('brandrisk-toggle').addEventListener('click', toggleBrandrisk)
 document.getElementById('layer-toggle').addEventListener('click', (e) => {
