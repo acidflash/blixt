@@ -372,103 +372,101 @@ app.get('/api/brandrisk', (_req, res) => {
   res.json({ updated: brandriskUpdated, validTime: brandrisk[0]?.validTime ?? null, points: brandrisk })
 })
 
-// --- Wind (Open-Meteo via proxy) ---
-// Open-Meteos gratistier har tre travande gränser: ~600 "location calls"/minut,
-// 5 000/timme, och — den som faktiskt styr här — bara 10 000/dygn, DELAD per
-// käll-IP mellan allt som anropar Open-Meteo från den IP:n. Det gamla
-// klient-side upplägget hämtade en global 4°-grid (4186 punkter) i 9 parallella
-// anrop PER BESÖKARE, vilket small i minutgränsen direkt (HTTP 429). Ett
-// server-side 6°-grid (1891 punkter, var 6:e timme ≈ 7 564 anrop/dygn) löste
-// burst-problemet men åt ändå 76 % av HELA dygnsbudgeten på egen hand — noll
-// marginal för omförsök, och en enda misslyckad körning + 15-min-retry räckte
-// för att permanent trigga "Daily API request limit exceeded" (verifierat
-// 2026-08-11: `curl` mot Open-Meteo gav 429 med den texten direkt, oavsett
-// vad servern gjorde). Gridden är därför skalad ner till Skandinavien i
-// stället för hela jorden (samma bbox som brandrisk) — 900 punkter × 4
-// körningar/dygn ≈ 3 600 anrop/dygn, 36 % av budgeten, med gott om marginal
-// för omförsök. Ger dessutom bättre lokal upplösning (0,5°) än det gamla
-// 6°-globala rutnätet. Inom varje körning hämtas punkterna sekventiellt i
-// små chunkar med paus mellan, så att inte heller minut- eller timgränsen
-// träffas.
+// --- Wind (SMHI snow1g via proxy) ---
+// Körde tidigare mot Open-Meteo (global grid, senare nedskalad till en
+// Skandinavien-bbox på 36 % av dygnsbudgeten). Även det visade sig
+// opålitligt: efter en engångsöverbelastning 9 augusti (en glömd,
+// separat körande dev-process som pollade Open-Meteo parallellt i tre
+// dygn utan att någon visste om det — hittad och dödad 12 augusti)
+// fortsatte anropen avvisas med HTTP 429 i 8+ timmar även efter att både
+// den processen dödats och den dokumenterade dygns-/timmes-/minutkvoten
+// bevisligen återställts (verifierat med rena `curl`-anrop utan appen
+// inblandad) — sannolikt en längre IP-nivå-spärr som inte följer den
+// dokumenterade kvot-cykeln. Open-Meteo erbjuder ingen gratis registrerad
+// API-nyckel (bara anonym IP-baserad åtkomst eller betald prenumeration),
+// så det gick inte att komma runt spärren utan att betala för något som
+// är avstängt som standard. Bytt till SMHI:s egen punktprognos-API i
+// stället — samma värd, samma mönster (arbetskö med N parallella workers)
+// som brandrisk redan använder utan kvotproblem.
+//
+// SMHI:s tidigare pmp3g-kategori deprecerades 31 mars 2026 (HTTP 404 på
+// alla anrop); ersättaren är category/snow1g/version/1 (verifierat
+// 2026-08-12, inget {period}-segment behövs till skillnad från fwif1g).
+// Samma data, men vind-fälten heter numera `wind_speed` (m/s) och
+// `wind_from_direction` (grader, meteorologisk konvention — riktning
+// vinden kommer FRÅN, samma som Open-Meteos gamla fält) i stället för
+// `ws`/`wd`, och svaret har en platt `data`-struktur per tidssteg i
+// timeSeries i stället för `parameters`-arrayen som fwif1g använder.
+const SNOW1G_BASE = 'https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1'
 const WIND_LA1 = 69.5, WIND_LA2 = 55
 const WIND_LO1 = 10, WIND_LO2 = 24.5
 const WIND_D = 0.5
 const WIND_NX = Math.round((WIND_LO2 - WIND_LO1) / WIND_D) + 1
 const WIND_NY = Math.round((WIND_LA1 - WIND_LA2) / WIND_D) + 1
 const WIND_POINTS = WIND_NX * WIND_NY
-const WIND_CHUNK = 200
-const WIND_CHUNK_DELAY_MS = 3000
+const WIND_CONCURRENCY = 8 // samma som brandrisk
 
 let windData = null // leaflet-velocity-formaterad data (två headers + arrays)
 let windUpdated = null
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-async function fetchWindChunk(chunk) {
-  const lats = chunk.map(p => p[0]).join(',')
-  const lons = chunk.map(p => p[1]).join(',')
-  const res = await fetch(
-    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_days=1`
-  )
-  if (!res.ok) throw new Error('Open-Meteo HTTP ' + res.status)
+async function fetchWindPoint(lat, lon) {
+  const res = await fetch(`${SNOW1G_BASE}/geotype/point/lon/${lon}/lat/${lat}/data.json`)
+  if (!res.ok) throw new Error('HTTP ' + res.status)
   const json = await res.json()
-  return Array.isArray(json) ? json : (json.results ?? [json])
+  const ts = json.timeSeries
+  if (!Array.isArray(ts) || !ts.length) return null
+  const step = pickTimeStep(ts, Date.now())
+  const speed = step.data?.wind_speed
+  const dir = step.data?.wind_from_direction
+  if (typeof speed !== 'number' || typeof dir !== 'number') return null
+  return { speed, dir }
 }
 
 async function pollWind() {
   const points = []
   for (let lat = WIND_LA1; lat >= WIND_LA2; lat -= WIND_D) {
     for (let lon = WIND_LO1; lon <= WIND_LO2; lon += WIND_D) {
-      points.push([lat, lon])
+      points.push([Math.round(lat * 10) / 10, Math.round(lon * 10) / 10])
     }
   }
 
-  const speeds = new Array(WIND_POINTS)
-  const dirs = new Array(WIND_POINTS)
-  try {
-    let idx = 0
-    for (let i = 0; i < WIND_POINTS; i += WIND_CHUNK) {
-      const data = await fetchWindChunk(points.slice(i, i + WIND_CHUNK))
-      for (const r of data) {
-        speeds[idx] = r.current?.wind_speed_10m ?? 0
-        dirs[idx] = (r.current?.wind_direction_10m ?? 0) * Math.PI / 180
-        idx++
-      }
-      if (i + WIND_CHUNK < WIND_POINTS) await sleep(WIND_CHUNK_DELAY_MS)
+  const out = new Array(WIND_POINTS)
+  let idx = 0
+  const workers = Array.from({ length: WIND_CONCURRENCY }, async () => {
+    while (true) {
+      const i = idx++
+      if (i >= points.length) break
+      const [lat, lon] = points[i]
+      try {
+        out[i] = await fetchWindPoint(lat, lon)
+      } catch { /* punktfel ignoreras, precis som brandrisk */ }
     }
+  })
+  await Promise.all(workers)
 
-    const uData = new Array(WIND_POINTS)
-    const vData = new Array(WIND_POINTS)
-    for (let i = 0; i < WIND_POINTS; i++) {
-      uData[i] = -speeds[i] * Math.sin(dirs[i])
-      vData[i] = -speeds[i] * Math.cos(dirs[i])
-    }
-
-    const refTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
-    const hdr = { parameterUnit: 'm.s-1', parameterCategory: 2, dx: WIND_D, dy: WIND_D, la1: WIND_LA1, la2: WIND_LA2, lo1: WIND_LO1, lo2: WIND_LO2, nx: WIND_NX, ny: WIND_NY, refTime }
-    windData = [
-      { header: { ...hdr, parameterNumber: 2, parameterNumberName: 'eastward_wind' }, data: uData },
-      { header: { ...hdr, parameterNumber: 3, parameterNumberName: 'northward_wind' }, data: vData },
-    ]
-    windUpdated = new Date().toISOString()
-    console.log(`[Wind] ${WIND_POINTS} punkter hämtade (Open-Meteo)`)
-    return true
-  } catch (e) {
-    console.warn('[Wind] hämtning misslyckades, behåller tidigare data:', e.message)
-    return false
+  const hits = out.filter(Boolean).length
+  if (hits === 0) {
+    console.warn('[Wind] inga punkter hämtades – SMHI otillgänglig? Data kvar från: ' + (windUpdated ?? 'aldrig'))
+    return
   }
-}
 
-// Självschemalagd i stället för setInterval: vid fel (t.ex. Open-Meteos
-// kvot inte återställd än) försöks igen efter en kort stund i stället för
-// att vänta hela 6-timmarscykeln — annars kan en enda misslyckad körning
-// lämna vindlagret tomt i timmar. En enstaka extra retry var 15:e minut
-// påverkar inte dygnsbudgeten nämnvärt.
-const WIND_INTERVAL_MS = 6 * 60 * 60_000
-const WIND_RETRY_MS = 15 * 60_000
-async function scheduleWind() {
-  const ok = await pollWind()
-  setTimeout(scheduleWind, ok ? WIND_INTERVAL_MS : WIND_RETRY_MS)
+  const uData = new Array(WIND_POINTS)
+  const vData = new Array(WIND_POINTS)
+  for (let i = 0; i < WIND_POINTS; i++) {
+    const speed = out[i]?.speed ?? 0
+    const dirRad = (out[i]?.dir ?? 0) * Math.PI / 180
+    uData[i] = -speed * Math.sin(dirRad)
+    vData[i] = -speed * Math.cos(dirRad)
+  }
+
+  const refTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  const hdr = { parameterUnit: 'm.s-1', parameterCategory: 2, dx: WIND_D, dy: WIND_D, la1: WIND_LA1, la2: WIND_LA2, lo1: WIND_LO1, lo2: WIND_LO2, nx: WIND_NX, ny: WIND_NY, refTime }
+  windData = [
+    { header: { ...hdr, parameterNumber: 2, parameterNumberName: 'eastward_wind' }, data: uData },
+    { header: { ...hdr, parameterNumber: 3, parameterNumberName: 'northward_wind' }, data: vData },
+  ]
+  windUpdated = new Date().toISOString()
+  console.log(`[Wind] ${hits}/${WIND_POINTS} punkter hämtade (SMHI snow1g v1)`)
 }
 
 app.get('/api/wind', (_req, res) => {
@@ -480,10 +478,11 @@ connectBlitzortung()
 pollSmhi()
 pollFires()
 pollBrandrisk()
-scheduleWind()
+pollWind()
 setInterval(pollSmhi, 60_000)
 setInterval(pollFires, 30 * 60_000)
 setInterval(pollBrandrisk, 30 * 60_000)
+setInterval(pollWind, 30 * 60_000)
 setInterval(save, 60_000)
 setInterval(saveVisitors, 60_000)
 process.on('SIGTERM', () => { save(); saveVisitors(); process.exit(0) })

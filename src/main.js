@@ -565,12 +565,10 @@ function toggleRadar() {
   }
 }
 
-// --- Wind (leaflet-velocity + Open-Meteo via serverproxy) ---
-// Servern hämtar vindgridden (Skandinavien) åt alla klienter och sprider ut
-// anropen mot Open-Meteo över tid (se pollWind i server.js, som även äger
-// grid-bbox/upplösning och uppdateringsintervall) — annars slår Open-Meteos
-// dygns-/timgräns till eftersom varje besökares webbläsare annars skulle
-// göra samma tunga hämtning själv.
+// --- Wind (leaflet-velocity + SMHI snow1g via serverproxy) ---
+// Servern hämtar vindgridden (Skandinavien) åt alla klienter en gång i
+// stället för att varje besökare gör samma hämtning själv (se pollWind i
+// server.js, som äger grid-bbox/upplösning och uppdateringsintervall).
 let windLayer = null
 let windVisible = false
 

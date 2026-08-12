@@ -115,12 +115,28 @@ change).
   container) — just editing files on disk does nothing to the live
   site until rebuilt. Bit us once: wind stayed on with old client-side
   behavior for 46h because the container predated the fix.
-- **Open-Meteo wind data can legitimately be `null`** in `/api/wind`
-  — it's a proxy with a 6h refresh + 15min retry-on-failure; a `null`
-  `data` field isn't a driver/app bug, just means the upstream fetch
-  hasn't succeeded yet (check `docker compose logs app | grep Wind`
-  for the reason, usually a daily quota exhaustion that clears at UTC
-  midnight).
+- **Wind data (`/api/wind`) can legitimately be `null`** briefly after a
+  fresh start — `pollWind` runs on boot and every 30min; a `null` `data`
+  field just means the first fetch hasn't completed yet (check
+  `docker compose logs app | grep Wind`). Wind now comes from SMHI
+  (`category/snow1g/version/1`, same host/pattern as brandrisk), which
+  hasn't shown quota issues — if you see sustained `[Wind] inga punkter
+  hämtades`, that's a real SMHI outage, not an expected quota wait.
+- **Before trusting any "still broken after the fix" observation on this
+  host, check for orphaned bare-metal processes.** `docker ps` only
+  shows containers — a stray `node server.js` started directly (not via
+  `docker compose`) during a past debugging session is invisible there
+  and can run for days, silently duplicating whatever the container
+  does (e.g. an old wind-poller sharing the same outbound IP/quota).
+  Check: `ps aux | grep "node server.js"`, then for each PID
+  `sudo cat /proc/<pid>/cgroup | grep -o '[0-9a-f]\{64\}'` and match
+  against `docker ps --no-trunc` — anything with no matching container
+  is bare-metal and worth investigating (`/proc/<pid>/cwd`,
+  `/proc/<pid>/environ` for `PORT`/`DATA_FILE` to identify it before
+  killing). Cost us ~8 hours of misdiagnosis on 2026-08-12: a process
+  from an Aug-9 debugging session, listening on port 8099 with a `/tmp`
+  scratch data dir, had been independently polling the same rate-limited
+  API for 3 days.
 - **Blitzortung WebSocket reconnects every ~6 minutes** by design —
   the upstream server cycles clients across `ws1/ws2/ws7/ws8`. A
   `[Blitzortung] frånkopplad, återansluter…` line in logs followed
