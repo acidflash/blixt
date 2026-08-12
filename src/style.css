@@ -256,6 +256,15 @@ html, body {
   user-select: none;
 }
 
+.brandrisk-legend-endlabels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: #888;
+  user-select: none;
+  margin-top: -2px;
+}
+
 /* Strike popup */
 .strike-popup .leaflet-popup-content-wrapper {
   background: rgba(10, 10, 26, 0.92);
@@ -274,10 +283,11 @@ html, body {
   color: #666;
 }
 
-/* Brandrisk-lagret: överlappande cirklar + blur ger ett "molnigt" utseende
-   likt regnradarn, i stället för diskreta prickar. */
+/* Brandrisk-lagret: överlappande halo+kärna-cirklar + blur ger ett mjukt,
+   "molnigt" utseende likt regnradarn, i stället för diskreta prickar eller
+   en kantig rutnätssilhuett. */
 .leaflet-brandrisk-pane {
-  filter: blur(9px);
+  filter: blur(12px);
 }
 
 /* Vindlagret ska inte fånga musklick */

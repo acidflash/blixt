@@ -677,11 +677,18 @@ function toggleFires() {
 // eller -1 = data saknas/utanför säsong. Se
 // https://opendata.smhi.se/metfcst/fwif/parameters (verifierat 2026-08-02).
 const BRANDRISK_COLORS = ['#3fa34d', '#8fbf3f', '#ffce00', '#f28f3b', '#e5484d', '#8b0000']
+// Mörkare kusin till varje färg ovan, till punkternas kant — samma idiom som
+// blixtarnas fill+stroke (se AGE_COLORS) i stället för en platt svart kant.
+const BRANDRISK_STROKE = ['#256b30', '#5c7f22', '#cc9e00', '#c56a1c', '#a5262b', '#4d0000']
 const BRANDRISK_LABELS = ['Mycket liten risk', 'Liten risk', 'Måttlig risk', 'Stor risk', 'Mycket stor risk', 'Extremt stor risk']
-// Servergridden har 0.8° steg (~55-90 km beroende på breddgrad). Radien är satt
-// så grannpunkter överlappar och tonas ihop via blur-filtret på panen — samma
-// "molnigt" utseende som regnradarlagret, i stället för diskreta prickar.
-const BRANDRISK_RADIUS_M = 60_000
+// Servergridden har 0.8° steg (~55-90 km beroende på breddgrad). Varje punkt
+// ritas som två överlappande cirklar (liten mättad kärna + stor ljus halo) i
+// stället för en enda platt cirkel — halon ger en mjuk, gradvis avtoning ut
+// mot grannpunkterna så det blir ett riktigt "molnigt" utseende (som
+// regnradarn) i stället för en pixlig/kantig rutnätssilhuett när blur-filtret
+// på panen (se .leaflet-brandrisk-pane i style.css) sen tonar ihop allt.
+const BRANDRISK_CORE_RADIUS_M = 42_000
+const BRANDRISK_HALO_RADIUS_M = 95_000
 
 let brandriskLayer = null
 let brandriskVisible = false // avstängt som standard tills data finns tillgänglig
@@ -693,14 +700,24 @@ function brandriskStep(point) {
   return Math.max(0, Math.min(Math.round(v) - 1, BRANDRISK_COLORS.length - 1))
 }
 
-// Molnigt bakgrundslager: stora överlappande cirklar, rent dekorativa (klick
-// går rakt igenom till punkt-lagret nedan).
-function brandriskCloudStyle(point) {
-  const step = brandriskStep(point)
+// Molnigt bakgrundslager: två storlekar per punkt (halo + kärna), rent
+// dekorativa (klick går rakt igenom till punkt-lagret nedan).
+function brandriskHaloStyle(point) {
   return {
     renderer: brandriskRenderer,
-    radius: BRANDRISK_RADIUS_M,
-    fillColor: BRANDRISK_COLORS[step],
+    radius: BRANDRISK_HALO_RADIUS_M,
+    fillColor: BRANDRISK_COLORS[brandriskStep(point)],
+    stroke: false,
+    fillOpacity: 0.22,
+    interactive: false,
+  }
+}
+
+function brandriskCoreStyle(point) {
+  return {
+    renderer: brandriskRenderer,
+    radius: BRANDRISK_CORE_RADIUS_M,
+    fillColor: BRANDRISK_COLORS[brandriskStep(point)],
     stroke: false,
     fillOpacity: 0.5,
     interactive: false,
@@ -712,18 +729,22 @@ function brandriskCloudStyle(point) {
 function brandriskDotStyle(point) {
   const step = brandriskStep(point)
   return {
-    radius: 5,
+    radius: 6,
     fillColor: BRANDRISK_COLORS[step],
-    color: '#111',
-    weight: 0.6,
-    fillOpacity: 0.85,
+    color: BRANDRISK_STROKE[step],
+    weight: 1.5,
+    fillOpacity: 0.9,
   }
 }
 
 function brandriskPopup(point) {
   const step = brandriskStep(point)
   const riskLine = step >= 0
-    ? `<div>Risknivå: <b>${BRANDRISK_LABELS[step]}</b></div>`
+    ? `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+         <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${BRANDRISK_COLORS[step]};border:1px solid ${BRANDRISK_STROKE[step]}"></span>
+         <b>${BRANDRISK_LABELS[step]}</b>
+         <span style="color:#888">(nivå ${step + 1}/6)</span>
+       </div>`
     : '<div style="color:#888">Ingen riskdata på denna punkt</div>'
   const valid = point.validTime ? ` (${new Date(point.validTime).toLocaleString('sv-SE')})` : ''
   return `<div style="font-size:13px;line-height:1.7">
@@ -740,10 +761,12 @@ async function updateBrandrisk() {
     const data = await res.json()
     const points = (data?.points ?? []).filter((p) => brandriskStep(p) >= 0)
     if (brandriskLayer) map.removeLayer(brandriskLayer)
-    const clouds = points.map((p) => L.circle([p.lat, p.lon], brandriskCloudStyle(p)))
+    // Halor ritas först (underst) så kärnorna hamnar ovanpå dem.
+    const halos = points.map((p) => L.circle([p.lat, p.lon], brandriskHaloStyle(p)))
+    const cores = points.map((p) => L.circle([p.lat, p.lon], brandriskCoreStyle(p)))
     const dots = points.map((p) => L.circleMarker([p.lat, p.lon], brandriskDotStyle(p))
       .bindPopup(() => brandriskPopup(p), { className: 'strike-popup' }))
-    brandriskLayer = L.layerGroup([...clouds, ...dots])
+    brandriskLayer = L.layerGroup([...halos, ...cores, ...dots])
     if (brandriskVisible) brandriskLayer.addTo(map)
   } catch (e) {
     console.warn('Brandrisk fetch failed:', e)
