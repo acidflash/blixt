@@ -79,11 +79,18 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 - **Server** (`/data/strikes.json`): authoritative, shared across all clients; survives PWA/browser isolation
 - **localStorage** (`blixt_strikes`): fast local cache; debounced save 3s after last strike + `beforeunload`
 
+### Map base layers (`MAP_LAYERS` in `src/main.js`)
+
+- Four switchable base layers: `dark` (default), `light`, `satellite` (Esri ArcGIS World_Imagery), `osm` (raw OpenStreetMap tiles). Choice persisted in `localStorage` (`blixt_maplayer`).
+- `dark` and `light` are **Carto** raster tiles (`basemaps.cartocdn.com`, styles `dark_all` and `rastertiles/voyager`) and require an API key as of Aug 2026 — appended as `?key=...` on the tile URL.
+- Key is `VITE_CARTO_API_KEY` in `.env`, baked into the client bundle at build time via Vite (`import.meta.env`) since Leaflet fetches tiles directly from the browser — cannot be proxied server-side without multiplying tile traffic through our own server. Passed through to Docker via a build arg (`ARG`/`ENV` in `Dockerfile`, `build.args` in `docker-compose.yml`), same variable name throughout.
+- If the key is unset, the `?key=` suffix is simply omitted (tiles will then fail to load from Carto, but `satellite`/`osm` are unaffected since they're separate providers).
+
 ### PWA
 
 - `vite-plugin-pwa` generates `dist/sw.js` (Workbox service worker) and `dist/manifest.webmanifest`
 - Icons: `public/icon-192.png`, `public/icon-512.png`, `public/apple-touch-icon.png` (generated from `public/icon.svg` via `sharp`)
-- Map tiles (CartoDB) are cached by the service worker (`CacheFirst`, 24h, 1000 entries)
+- Map tiles (Carto) are cached by the service worker (`CacheFirst`, 24h, 1000 entries) — matches on domain prefix, so the `?key=` query string doesn't affect caching
 - `apple-mobile-web-app-capable` + `black-translucent` status bar for iOS fullscreen
 
 ### Rain radar

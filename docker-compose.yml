@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_CARTO_API_KEY: ${VITE_CARTO_API_KEY}
     ports:
       - "80:80"
     environment:

@@ -86,15 +86,19 @@ function nearestKm() {
 }
 
 // --- Map layers ---
+// Carto kräver API-nyckel (satt i .env som VITE_CARTO_API_KEY, bakas in vid build eftersom
+// Leaflet hämtar tiles direkt i klienten — kan inte proxyas via servern utan att mångdubbla trafiken).
+const CARTO_API_KEY = import.meta.env.VITE_CARTO_API_KEY ?? ''
+const CARTO_KEY_SUFFIX = CARTO_API_KEY ? `?key=${CARTO_API_KEY}` : ''
 const MAP_LAYERS = {
   dark: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    url: `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${CARTO_KEY_SUFFIX}`,
     attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
     subdomains: 'abcd',
     maxZoom: 20,
   },
   light: {
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    url: `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png${CARTO_KEY_SUFFIX}`,
     attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
     subdomains: 'abcd',
     maxZoom: 20,
