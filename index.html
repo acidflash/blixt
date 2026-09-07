@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Blixt</title>
   <link rel="icon" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -13,58 +13,65 @@
   <meta name="theme-color" content="#0d0d1a">
 </head>
 <body>
-  <div id="map"></div>
-  <div id="status"></div>
-  <div id="map-controls">
-    <div class="layer-select-wrap">
-      <button id="layer-toggle" class="map-ctrl-btn">🗺 <span class="btn-label">Karta</span></button>
-      <div id="layer-menu" class="layer-menu hidden">
-        <button class="layer-option" data-layer="dark">Mörk</button>
-        <button class="layer-option" data-layer="light">Ljus</button>
-        <button class="layer-option" data-layer="satellite">Satellit</button>
-        <button class="layer-option" data-layer="osm">Standard</button>
-      </div>
+  <main id="map" aria-label="Karta med blixtar och väderlager"></main>
+  <div id="status" aria-label="Blixtar och anslutning"></div>
+  <div id="connection-announcement" class="sr-only" role="status" aria-live="polite"></div>
+  <div id="location-status" role="status" hidden></div>
+  <div id="map-error" role="status" hidden></div>
+
+  <div id="map-controls" class="panel" role="region" aria-labelledby="layers-heading" tabindex="-1">
+    <h2 id="layers-heading" class="panel-heading">Kartlager</h2>
+    <fieldset class="basemap-options">
+      <legend>Karta</legend>
+      <label class="layer-option"><input type="radio" name="basemap" value="dark" checked> Mörk</label>
+      <label class="layer-option"><input type="radio" name="basemap" value="light"> Ljus</label>
+      <label class="layer-option"><input type="radio" name="basemap" value="satellite"> Satellit</label>
+      <label class="layer-option"><input type="radio" name="basemap" value="osm"> Standard</label>
+    </fieldset>
+    <div class="overlay-options" aria-label="Väderlager">
+      <button id="wind-toggle" class="map-ctrl-btn" aria-pressed="false" aria-describedby="wind-state">
+        <span class="layer-name"><span aria-hidden="true">↗</span> Vind</span><span id="wind-state" class="layer-state">Hämtar…</span>
+      </button>
+      <button id="radar-toggle" class="map-ctrl-btn" aria-pressed="true" aria-describedby="radar-state">
+        <span class="layer-name"><span aria-hidden="true">☂</span> Radar</span><span id="radar-state" class="layer-state">Hämtar…</span>
+      </button>
+      <button id="fires-toggle" class="map-ctrl-btn" aria-pressed="false" aria-describedby="fires-state">
+        <span class="layer-name"><span aria-hidden="true">♨</span> Bränder</span><span id="fires-state" class="layer-state">Hämtar…</span>
+      </button>
+      <button id="brandrisk-toggle" class="map-ctrl-btn" aria-pressed="false" aria-describedby="brandrisk-state">
+        <span class="layer-name"><span aria-hidden="true">△</span> Brandrisk</span><span id="brandrisk-state" class="layer-state">Hämtar…</span>
+      </button>
     </div>
-    <button id="wind-toggle" class="map-ctrl-btn">💨 <span class="btn-label">Vind</span></button>
-    <button id="radar-toggle" class="map-ctrl-btn">🌧 <span class="btn-label">Radar</span></button>
-    <button id="fires-toggle" class="map-ctrl-btn">🔥 <span class="btn-label">Bränder</span></button>
-    <button id="brandrisk-toggle" class="map-ctrl-btn">⚠️ <span class="btn-label">Brandrisk</span></button>
+    <p id="motion-note" class="panel-note" hidden>Vindanimationen är av eftersom du föredrar minskad rörelse. Du kan slå på den med Vind.</p>
   </div>
-  <div id="legend">
-    <div class="legend-title">Blixtar · ålder</div>
+
+  <section id="legend" class="panel" aria-labelledby="legend-heading" tabindex="-1">
+    <h2 id="legend-heading" class="panel-heading">Blixtar · senaste 3 timmarna</h2>
     <div class="legend-body">
       <div class="legend-col">
-        <div class="legend-bar-label" title="Blitzortung (realtid)">⚡</div>
-        <div class="legend-bar" id="legend-bar-blitz"></div>
+        <span class="legend-bar-label">Blitzortung</span>
+        <div class="legend-bar" id="legend-bar-blitz" aria-hidden="true"></div>
       </div>
       <div class="legend-col">
-        <div class="legend-bar-label" title="SMHI (historiskt)">SMHI</div>
-        <div class="legend-bar" id="legend-bar-smhi"></div>
+        <span class="legend-bar-label">SMHI</span>
+        <div class="legend-bar" id="legend-bar-smhi" aria-hidden="true"></div>
       </div>
-      <div id="legend-labels">
-        <span>Nu</span>
-        <span>1 tim</span>
-        <span>2 tim</span>
-        <span>3 tim</span>
-      </div>
+      <div id="legend-labels"><span>Nu</span><span>1 tim</span><span>2 tim</span><span>3 tim</span></div>
     </div>
-    <div id="brandrisk-legend" class="legend-section hidden">
-      <div class="legend-title">Brandrisk · SMHI</div>
-      <div id="legend-bar-brandrisk"></div>
-      <div class="brandrisk-legend-labels">
-        <span title="Mycket liten risk">1</span>
-        <span title="Liten risk">2</span>
-        <span title="Måttlig risk">3</span>
-        <span title="Stor risk">4</span>
-        <span title="Mycket stor risk">5</span>
-        <span title="Extremt stor risk">6</span>
-      </div>
-      <div class="brandrisk-legend-endlabels">
-        <span>Liten risk</span>
-        <span>Extrem risk</span>
-      </div>
+    <p class="panel-note">Tryck på en blixt för tid, källa och avstånd från din position.</p>
+    <div id="brandrisk-legend" class="legend-section" hidden>
+      <h3 class="legend-title">Brandrisk · SMHI</h3>
+      <div id="legend-bar-brandrisk" aria-hidden="true"></div>
+      <ol class="risk-levels">
+        <li>Mycket liten</li><li>Liten</li><li>Måttlig</li><li>Stor</li><li>Mycket stor</li><li>Extremt stor</li>
+      </ol>
     </div>
-  </div>
+  </section>
+
+  <nav id="mobile-controls" aria-label="Kartverktyg">
+    <button id="layers-toggle" class="panel-toggle" aria-expanded="false" aria-controls="map-controls">Lager</button>
+    <button id="legend-toggle" class="panel-toggle" aria-expanded="false" aria-controls="legend">Förklaring</button>
+  </nav>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

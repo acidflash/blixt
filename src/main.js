@@ -1,11 +1,12 @@
 import L from 'leaflet'
+import { MAX_AGE_MS, StrikeStore } from '../shared/strikes.js'
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-velocity/dist/leaflet-velocity.css'
 import 'leaflet-velocity'
 import './style.css'
+import { setupMapUI, reducedMotion, setLayerState, setLayerEnabled } from './map-ui.js'
 
 // --- Config ---
-const MAX_AGE_MS = 3 * 60 * 60 * 1000 // 3 timmar
 const UPDATE_INTERVAL_MS = 5_000
 const WS_URLS = [
   'wss://ws1.blitzortung.org/',
@@ -54,7 +55,7 @@ let map
 let userMarker = null
 let userLat = null
 let userLon = null
-let strikes = [] // { lat, lon, timeMs, marker }
+const strikes = new StrikeStore()
 let wsIndex = 0
 let ws = null
 let reconnectTimer = null
@@ -76,9 +77,9 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 function nearestKm() {
-  if (userLat === null || strikes.length === 0) return null
+  if (userLat === null || strikes.size === 0) return null
   let min = Infinity
-  for (const s of strikes) {
+  for (const s of strikes.values()) {
     const d = haversineKm(userLat, userLon, s.lat, s.lon)
     if (d < min) min = d
   }
@@ -120,26 +121,42 @@ const MAP_LAYER_KEY = 'blixt_maplayer'
 let baseLayer = null
 
 function setMapLayer(id) {
-  const def = MAP_LAYERS[id] ? id : 'dark'
+  const def = Object.hasOwn(MAP_LAYERS, id) ? id : 'dark'
   const layer = MAP_LAYERS[def]
   if (baseLayer) map.removeLayer(baseLayer)
   const opts = { attribution: layer.attribution, maxZoom: layer.maxZoom }
   if (layer.subdomains) opts.subdomains = layer.subdomains
   if (layer.maxNativeZoom) opts.maxNativeZoom = layer.maxNativeZoom
-  baseLayer = L.tileLayer(layer.url, opts).addTo(map)
-  localStorage.setItem(MAP_LAYER_KEY, def)
-  document.querySelectorAll('.layer-option').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.layer === def)
+  const currentLayer = L.tileLayer(layer.url, opts)
+  const error = document.getElementById('map-error')
+  error.hidden = true
+  let failed = false
+  currentLayer.on('tileerror', () => {
+    if (baseLayer !== currentLayer) return
+    failed = true
+    error.textContent = 'Kartan kunde inte laddas. Välj en annan karta under Lager.'
+    error.hidden = false
   })
+  currentLayer.on('loading', () => { failed = false })
+  currentLayer.on('load', () => {
+    if (baseLayer === currentLayer && !failed) error.hidden = true
+  })
+  baseLayer = currentLayer
+  baseLayer.addTo(map)
+  try { localStorage.setItem(MAP_LAYER_KEY, def) } catch { /* storage may be unavailable */ }
+  document.querySelectorAll('input[name=basemap]').forEach(input => { input.checked = input.value === def })
 }
 
 // --- Map ---
 function initMap() {
   const renderer = L.canvas({ padding: 0.5 })
 
-  map = L.map('map', { zoomControl: true, renderer, minZoom: 3 })
+  map = L.map('map', { zoomControl: false, renderer, minZoom: 3, zoomAnimation: !reducedMotion.matches, fadeAnimation: !reducedMotion.matches })
+  L.control.zoom({ zoomInTitle: 'Zooma in', zoomOutTitle: 'Zooma ut' }).addTo(map)
 
-  setMapLayer(localStorage.getItem(MAP_LAYER_KEY) || 'dark')
+  let savedLayer = 'dark'
+  try { savedLayer = localStorage.getItem(MAP_LAYER_KEY) || 'dark' } catch {}
+  setMapLayer(savedLayer)
 
   map.setView([62, 15], 5) // Sweden as fallback
 
@@ -155,10 +172,14 @@ function initMap() {
     onAdd() {
       const btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control-loc')
       btn.title = 'Min position'
+      btn.id = 'locate-button'
+      btn.type = 'button'
+      btn.setAttribute('aria-label', 'Min position')
       btn.innerHTML = '⊙'
       L.DomEvent.on(btn, 'click', (e) => {
         L.DomEvent.stop(e)
-        if (userLat !== null) map.setView([userLat, userLon], Math.max(map.getZoom(), 12))
+        if (userLat !== null) map.setView([userLat, userLon], Math.max(map.getZoom(), 12), { animate: !reducedMotion.matches })
+        if (userLat === null || positionWatch === null) initGeolocation()
       })
       return btn
     },
@@ -167,14 +188,22 @@ function initMap() {
 }
 
 // --- Geolocation ---
+let positionWatch = null
 function initGeolocation() {
+  const notice = document.getElementById('location-status')
+  const button = document.getElementById('locate-button')
+  notice.hidden = false
   if (!navigator.geolocation) {
-    setStatus('Geolocation saknas i webbläsaren')
+    notice.textContent = 'Din webbläsare stöder inte position. Du kan flytta kartan själv.'
     return
   }
-  navigator.geolocation.watchPosition(onPosition, onPositionError, {
+  if (positionWatch !== null) navigator.geolocation.clearWatch(positionWatch)
+  notice.textContent = 'Hämtar din position…'
+  button.setAttribute('aria-busy', 'true')
+  positionWatch = navigator.geolocation.watchPosition(onPosition, onPositionError, {
     enableHighAccuracy: true,
     maximumAge: 10_000,
+    timeout: 15_000,
   })
 }
 
@@ -182,8 +211,10 @@ function onPosition({ coords }) {
   const { latitude: lat, longitude: lon, accuracy } = coords
   userLat = lat
   userLon = lon
+  document.getElementById('location-status').hidden = true
+  document.getElementById('locate-button').setAttribute('aria-busy', 'false')
 
-  const popupHtml = `${lat.toFixed(5)}, ${lon.toFixed(5)}<br><small style="color:#888">±${Math.round(accuracy)} m</small>`
+  const popupHtml = `${lat.toFixed(5)}, ${lon.toFixed(5)}<br><small class="popup-muted">±${Math.round(accuracy)} m</small>`
 
   if (!userMarker) {
     map.setView([lat, lon], 8)
@@ -195,7 +226,7 @@ function onPosition({ coords }) {
         iconAnchor: [7, 7],
       }),
       zIndexOffset: 1000,
-    }).addTo(map).bindPopup(popupHtml)
+    }).addTo(map).bindPopup(popupHtml, { className: 'strike-popup', autoPan: false })
   } else {
     userMarker.setLatLng([lat, lon])
     userMarker.setPopupContent(popupHtml)
@@ -203,7 +234,14 @@ function onPosition({ coords }) {
 }
 
 function onPositionError(err) {
-  console.warn('Position error:', err.message)
+  const notice = document.getElementById('location-status')
+  notice.textContent = err.code === 1
+    ? 'Position nekad. Tillåt platsåtkomst i webbläsaren och tryck på Min position igen.'
+    : 'Positionen kunde inte hämtas. Tryck på Min position för att försöka igen.'
+  notice.hidden = false
+  document.getElementById('locate-button').setAttribute('aria-busy', 'false')
+  if (positionWatch !== null) navigator.geolocation.clearWatch(positionWatch)
+  positionWatch = null
 }
 
 // --- Server WebSocket (primär) ---
@@ -214,7 +252,8 @@ function connectToServer() {
 
   serverWs.onopen = () => {
     opened = true
-    sourceState.blitzortung = 'connecting'
+    sourceState.blitzortung = 'relay'
+    sourceState.server = 'ok'
     renderStatus()
   }
 
@@ -222,17 +261,15 @@ function connectToServer() {
     try {
       const msg = JSON.parse(data)
       if (msg.type === 'history') {
-        sourceState.blitzortung = 'live'
+        sourceState.blitzortung = 'relay'
         const smhiInHistory = msg.strikes.some(s => s.meta?.source === 'smhi')
         if (smhiInHistory) sourceState.smhi = 'ok'
-        renderStatus()
-        const existing = new Set(strikes.map(s => `${s.timeMs}:${s.lat}:${s.lon}`))
         for (const { lat, lon, timeMs, meta } of msg.strikes) {
-          const key = `${timeMs}:${lat}:${lon}`
-          if (!existing.has(key)) { existing.add(key); addStrike(lat, lon, timeMs, false, meta ?? {}) }
+          addStrike(lat, lon, timeMs, false, meta)
         }
+        renderStatus()
       } else if (msg.type === 'strike') {
-        sourceState.blitzortung = 'live'
+        sourceState.blitzortung = 'relay'
         if (msg.meta?.source === 'smhi') sourceState.smhi = 'ok'
         addStrike(msg.lat, msg.lon, msg.timeMs, true, msg.meta ?? {})
         renderStatus()
@@ -241,6 +278,7 @@ function connectToServer() {
   }
 
   serverWs.onclose = () => {
+    sourceState.server = 'error'
     if (opened) {
       sourceState.blitzortung = 'reconnecting'
       renderStatus()
@@ -305,7 +343,7 @@ function scheduleBlitzReconnect() {
 // --- Strikes ---
 function strikeStyle(ageMs, meta) {
   const palette = meta?.source === 'smhi' ? SMHI_AGE_COLORS : AGE_COLORS
-  const opacity = 1 - ageMs / MAX_AGE_MS
+  const opacity = Math.max(0, Math.min(1, 1 - ageMs / MAX_AGE_MS))
   const bucket = palette.find(b => ageMs <= b.maxAge) ?? palette.at(-1)
   return {
     radius: 5,
@@ -319,7 +357,7 @@ function strikeStyle(ageMs, meta) {
 
 let saveTimer = null
 function scheduleSave() {
-  clearTimeout(saveTimer)
+  if (saveTimer !== null) return
   saveTimer = setTimeout(saveToStorage, 3_000)
 }
 
@@ -348,94 +386,83 @@ function strikePopup(timeMs, meta = {}, lat, lon) {
   let extraStr = ''
   if (meta.source === 'smhi') {
     if (meta.peakCurrent != null) extraStr += `<div>Toppström: ${meta.peakCurrent} kA</div>`
-    const type = meta.cloudIndicator === 0 ? 'Moln–mark' : 'Moln–moln'
+    const type = { 0: 'Moln–mark', 1: 'Moln–moln' }[meta.cloudIndicator] ?? 'Okänd'
     extraStr += `<div>Typ: ${type}</div>`
   }
 
   const sourceLabel = meta.source === 'smhi' ? 'SMHI' : 'Blitzortung'
   const sourceColor = meta.source === 'smhi' ? '#7ecaff' : '#ffdd88'
 
-  return `<div style="font-size:13px;line-height:1.7">
-    <div style="font-weight:600;margin-bottom:4px">Blixtnedslag ${dateStr} ${timeStr}</div>
+  return `<div class="popup-body">
+    <div class="popup-title">Blixtnedslag ${dateStr} ${timeStr}</div>
     ${distStr}${coordStr}${extraStr}<div style="color:${sourceColor}">Källa: ${sourceLabel}</div>
   </div>`
 }
 
 function addStrike(lat, lon, timeMs, ripple = false, meta = {}) {
+  const strike = strikes.add({ lat, lon, timeMs, meta })
+  if (!strike) return false
+  meta = strike.meta
   const marker = L.circleMarker([lat, lon], strikeStyle(Date.now() - timeMs, meta))
-    .bindPopup(() => strikePopup(timeMs, meta, lat, lon), { className: 'strike-popup' })
+    .bindPopup(() => strikePopup(timeMs, meta, lat, lon), { className: 'strike-popup', autoPan: false })
     .addTo(map)
-  strikes.push({ lat, lon, timeMs, meta, marker })
-  if (ripple) addRipple(lat, lon)
+  strike.marker = marker
+  if (ripple && !reducedMotion.matches) addRipple(lat, lon)
   scheduleSave()
+  return true
 }
 
 function updateStrikes() {
   const now = Date.now()
-  const kept = []
-
-  for (const strike of strikes) {
-    const age = now - strike.timeMs
-    if (age > MAX_AGE_MS) {
-      map.removeLayer(strike.marker)
-    } else {
-      strike.marker.setStyle(strikeStyle(age, strike.meta))
-      kept.push(strike)
-    }
+  for (const strike of strikes.prune(now)) map.removeLayer(strike.marker)
+  for (const strike of strikes.values()) {
+    strike.marker.setStyle(strikeStyle(now - strike.timeMs, strike.meta))
   }
 
-  strikes = kept
   renderStatus()
 
 }
 
 // --- Status bar ---
 function renderStatus() {
-  const count = strikes.length
+  const count = strikes.size
   const countStr = count > 0
     ? `${count} blixt${count !== 1 ? 'ar' : ''}`
     : 'Inga blixtar'
 
-  const blitzDot = {
-    connecting:   '<span style="color:#ffcc44">●</span>',
-    live:         '<span style="color:#44dd88">●</span>',
-    reconnecting: '<span style="color:#ff6644">●</span>',
-  }[sourceState.blitzortung] ?? ''
-
-  const blitzText = {
-    connecting:   'Ansluter…',
-    live:         'Live',
+  const connection = {
+    connecting: 'Ansluter…',
+    relay: 'Ansluten till servern',
+    live: 'Blitzortung direkt',
     reconnecting: 'Återansluter…',
-  }[sourceState.blitzortung] ?? '?'
+  }[sourceState.blitzortung]
+  const details = [connection]
+  if (sourceState.smhi === 'ok') details.push('SMHI-data')
+  if (sourceState.smhi === 'loading') details.push('Hämtar SMHI…')
+  if (sourceState.server === 'error') details.push('Servern kan inte nås')
+  const status = document.getElementById('status')
+  status.replaceChildren()
+  const countNode = document.createElement('span')
+  countNode.className = 'status-count'
+  countNode.textContent = countStr
+  const detailNode = document.createElement('span')
+  detailNode.className = 'status-detail'
+  detailNode.textContent = details.join(' · ')
+  status.append(countNode, detailNode)
+  const announcement = document.getElementById('connection-announcement')
+  const message = sourceState.server === 'error' ? 'Servern kan inte nås' : connection
+  if (announcement.textContent !== message) announcement.textContent = message
 
-  const blitzLabel = `${blitzDot} ⚡ ${blitzText}`
-
-  const smhiLabel = {
-    idle:    '',
-    loading: '· <span style="color:#ffcc44">●</span> SMHI',
-    ok:      '· <span style="color:#44dd88">●</span> SMHI',
-    empty:   '',
-  }[sourceState.smhi] ?? ''
-
-  const serverLabel = {
-    idle:  '',
-    ok:    '',
-    error: '· <span style="color:#ff6644">●</span> Server borta',
-  }[sourceState.server] ?? ''
-
-  const parts = [countStr, blitzLabel, smhiLabel, serverLabel]
-    .filter(Boolean)
-    .join('  ')
-
-  document.getElementById('status').innerHTML = parts
 }
 
 // --- Persistence ---
 const STORAGE_KEY = 'blixt_strikes'
 
 function saveToStorage() {
+  clearTimeout(saveTimer)
+  saveTimer = null
   const now = Date.now()
-  const payload = strikes
+  const payload = [...strikes.values()]
     .filter(s => now - s.timeMs < MAX_AGE_MS)
     .map(({ lat, lon, timeMs, meta }) => ({ lat, lon, timeMs, ...(meta && Object.keys(meta).length ? { meta } : {}) }))
   try {
@@ -463,24 +490,16 @@ function loadFromStorage() {
 // --- Server sync ---
 async function loadFromApi() {
   try {
-    const res = await fetch('/api/strikes')
-    if (!res.ok) return
+    const res = await fetch('/api/strikes', { signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error('Strikes API HTTP ' + res.status)
     const data = await res.json()
     const now = Date.now()
-    const existing = new Set(strikes.map(s => `${s.timeMs}:${s.lat}:${s.lon}`))
-    let added = 0
-    let smhiCount = 0
     for (const { lat, lon, timeMs, meta } of data) {
       if (now - timeMs > MAX_AGE_MS) continue
-      const key = `${timeMs}:${lat}:${lon}`
-      if (existing.has(key)) continue
-      existing.add(key)
-      addStrike(lat, lon, timeMs, false, meta ?? {})
-      if (meta?.source === 'smhi') smhiCount++
-      added++
+      addStrike(lat, lon, timeMs, false, meta)
     }
     sourceState.server = 'ok'
-    sourceState.smhi = smhiCount > 0 ? 'ok' : 'empty'
+    sourceState.smhi = [...strikes.values()].some(s => s.meta.source === 'smhi') ? 'ok' : 'empty'
     renderStatus()
   } catch {
     sourceState.server = 'error'
@@ -493,7 +512,6 @@ setInterval(loadFromApi, 60_000)
 
 // --- SMHI client-side (works in dev; in prod supplements server polling) ---
 const SMHI_BASE = 'https://opendata-download-lightning.smhi.se/api/version/latest'
-const smhiSeen = new Set()
 
 async function loadSmhiData() {
   sourceState.smhi = 'loading'
@@ -509,29 +527,24 @@ async function loadSmhiData() {
     { year: todayUtc.getUTCFullYear(), month: todayUtc.getUTCMonth() + 1, day: todayUtc.getUTCDate() },
   ]
 
-  let added = 0
   for (const d of days) {
     let raw
     try {
-      const res = await fetch(`${SMHI_BASE}/year/${d.year}/month/${d.month}/day/${d.day}/data.json`)
+      const res = await fetch(`${SMHI_BASE}/year/${d.year}/month/${d.month}/day/${d.day}/data.json`, { signal: AbortSignal.timeout(15_000) })
       if (!res.ok) continue
-      raw = (await res.json()).values ?? []
+      raw = (await res.json()).values
+      if (!Array.isArray(raw)) continue
     } catch { continue }
 
     for (const s of raw) {
       const timeMs = Date.UTC(s.year, s.month - 1, s.day, s.hours, s.minutes, s.seconds, Math.floor(s.nanoseconds / 1e6))
       if (timeMs < cutoff) continue
-      const key = `${timeMs}:${s.lat}:${s.lon}`
-      if (smhiSeen.has(key)) continue
-      smhiSeen.add(key)
-      if (strikes.some(e => e.timeMs === timeMs && e.lat === s.lat && e.lon === s.lon)) continue
       addStrike(s.lat, s.lon, timeMs, false, { source: 'smhi', cloudIndicator: s.cloudIndicator, peakCurrent: s.peakCurrent })
-      added++
     }
   }
 
   if (sourceState.smhi === 'loading') {
-    sourceState.smhi = added > 0 ? 'ok' : 'empty'
+    sourceState.smhi = [...strikes.values()].some(s => s.meta.source === 'smhi') ? 'ok' : 'empty'
     renderStatus()
   }
 }
@@ -541,32 +554,45 @@ let radarLayer = null
 let radarVisible = true
 
 async function updateRadar() {
+  setLayerState('radar', 'loading')
   try {
-    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json')
+    const res = await fetch('https://api.rainviewer.com/public/weather-maps.json', { signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error('Radar API HTTP ' + res.status)
     const data = await res.json()
     const frames = data.radar?.past
-    if (!frames?.length) return
+    if (!frames?.length) {
+      if (radarLayer) map.removeLayer(radarLayer)
+      radarLayer = null
+      setLayerState('radar', 'empty')
+      return
+    }
     const latest = frames[frames.length - 1]
     const url = `${data.host}${latest.path}/256/{z}/{x}/{y}/6/1_1.png`
     if (radarLayer) map.removeLayer(radarLayer)
     radarLayer = L.tileLayer(url, { opacity: 0.5, zIndex: 200, minNativeZoom: 3, maxNativeZoom: 7, attribution: 'Rain: RainViewer' })
+    const currentRadar = radarLayer
+    let tileFailed = false
+    radarLayer.on('loading', () => { tileFailed = false })
+    radarLayer.on('load', () => {
+      if (currentRadar === radarLayer) setLayerState('radar', tileFailed ? 'error' : 'ready')
+    })
     radarLayer.on('tileerror', (e) => {
+      tileFailed = true
+      if (currentRadar === radarLayer) setLayerState('radar', 'error')
       e.tile.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
     })
+    setLayerState('radar', 'ready')
     if (radarVisible) radarLayer.addTo(map)
-  } catch {}
+  } catch { setLayerState('radar', radarLayer ? 'stale' : 'error') }
 }
 
 function toggleRadar() {
   radarVisible = !radarVisible
-  const btn = document.getElementById('radar-toggle')
-  if (radarVisible) {
-    if (radarLayer) radarLayer.addTo(map)
-    btn.classList.add('active')
-  } else {
-    if (radarLayer) map.removeLayer(radarLayer)
-    btn.classList.remove('active')
+  if (radarLayer) {
+    if (radarVisible) radarLayer.addTo(map)
+    else map.removeLayer(radarLayer)
   }
+  setLayerEnabled('radar', radarVisible)
 }
 
 // --- Wind (leaflet-velocity + SMHI snow1g via serverproxy) ---
@@ -574,14 +600,15 @@ function toggleRadar() {
 // stället för att varje besökare gör samma hämtning själv (se pollWind i
 // server.js, som äger grid-bbox/upplösning och uppdateringsintervall).
 let windLayer = null
-let windVisible = true
+let windVisible = !reducedMotion.matches
 
 async function updateWind() {
+  setLayerState('wind', 'loading')
   try {
-    const res = await fetch('/api/wind')
+    const res = await fetch('/api/wind', { signal: AbortSignal.timeout(15_000) })
     if (!res.ok) throw new Error('Wind API HTTP ' + res.status)
     const { data: velData } = await res.json()
-    if (!velData) return // servern har inte hunnit hämta data än
+    if (!velData) { setLayerState('wind', windLayer ? 'stale' : 'empty'); return }
     if (windLayer) map.removeLayer(windLayer)
     windLayer = L.velocityLayer({
       displayValues: false,
@@ -595,21 +622,20 @@ async function updateWind() {
       particleMultiplier: 0.003,
     })
     if (windVisible) windLayer.addTo(map)
+    setLayerState('wind', 'ready')
   } catch (e) {
+    setLayerState('wind', windLayer ? 'stale' : 'error')
     console.warn('Wind fetch failed:', e)
   }
 }
 
 function toggleWind() {
   windVisible = !windVisible
-  const btn = document.getElementById('wind-toggle')
-  if (windVisible) {
-    if (windLayer) windLayer.addTo(map)
-    btn.classList.add('active')
-  } else {
-    if (windLayer) map.removeLayer(windLayer)
-    btn.classList.remove('active')
+  if (windLayer) {
+    if (windVisible) windLayer.addTo(map)
+    else map.removeLayer(windLayer)
   }
+  setLayerEnabled('wind', windVisible)
 }
 
 // --- Wildfires (NASA FIRMS via server proxy) ---
@@ -637,8 +663,8 @@ function firePopup(f) {
   const distStr = (userLat !== null)
     ? `<div>Avstånd: ${haversineKm(userLat, userLon, f.lat, f.lon).toFixed(1)} km</div>`
     : ''
-  return `<div style="font-size:13px;line-height:1.7">
-    <div style="font-weight:600;margin-bottom:4px">🔥 Markbrand ${dateStr} ${timeStr}</div>
+  return `<div class="popup-body">
+    <div class="popup-title">🔥 Markbrand ${dateStr} ${timeStr}</div>
     ${distStr}<div>Lat: ${f.lat.toFixed(4)} Lon: ${f.lon.toFixed(4)}</div>
     <div>Styrka (FRP): ${f.frp} MW</div>
     <div>Konfidens: ${confLabel}</div>
@@ -647,32 +673,32 @@ function firePopup(f) {
 }
 
 async function updateFires() {
+  setLayerState('fires', 'loading')
   try {
-    const res = await fetch('/api/fires')
-    if (!res.ok) return
+    const res = await fetch('/api/fires', { signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error('API HTTP ' + res.status)
     const data = await res.json()
     if (fireLayer) map.removeLayer(fireLayer)
     // No explicit renderer — shares the map's default canvas with strikes so hit-testing
     // (and thus click-through) works correctly instead of a private canvas blocking clicks.
     fireLayer = L.layerGroup(
-      data.map((f) => L.circleMarker([f.lat, f.lon], fireStyle(f)).bindPopup(() => firePopup(f), { className: 'strike-popup' }))
+      data.map((f) => L.circleMarker([f.lat, f.lon], fireStyle(f)).bindPopup(() => firePopup(f), { className: 'strike-popup', autoPan: false }))
     )
     if (firesVisible) fireLayer.addTo(map)
+    setLayerState('fires', data.length ? 'ready' : 'empty')
   } catch (e) {
+    setLayerState('fires', fireLayer ? 'stale' : 'error')
     console.warn('Fires fetch failed:', e)
   }
 }
 
 function toggleFires() {
   firesVisible = !firesVisible
-  const btn = document.getElementById('fires-toggle')
-  if (firesVisible) {
-    if (fireLayer) fireLayer.addTo(map)
-    btn.classList.add('active')
-  } else {
-    if (fireLayer) map.removeLayer(fireLayer)
-    btn.classList.remove('active')
+  if (fireLayer) {
+    if (firesVisible) fireLayer.addTo(map)
+    else map.removeLayer(fireLayer)
   }
+  setLayerEnabled('fires', firesVisible)
 }
 
 // --- Brandrisk (SMHI via serverproxy /api/brandrisk) ---
@@ -747,21 +773,22 @@ function brandriskPopup(point) {
     ? `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
          <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${BRANDRISK_COLORS[step]};border:1px solid ${BRANDRISK_STROKE[step]}"></span>
          <b>${BRANDRISK_LABELS[step]}</b>
-         <span style="color:#888">(nivå ${step + 1}/6)</span>
+         <span class="popup-muted">(nivå ${step + 1}/6)</span>
        </div>`
-    : '<div style="color:#888">Ingen riskdata på denna punkt</div>'
+    : '<div class="popup-muted">Ingen riskdata på denna punkt</div>'
   const valid = point.validTime ? ` (${new Date(point.validTime).toLocaleString('sv-SE')})` : ''
-  return `<div style="font-size:13px;line-height:1.7">
-    <div style="font-weight:600;margin-bottom:4px">⚠️ Brandrisk ${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}</div>
+  return `<div class="popup-body">
+    <div class="popup-title">⚠️ Brandrisk ${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}</div>
     ${riskLine}
     <div style="color:#ffb366">Källa: SMHI brandriskprognos${valid}</div>
   </div>`
 }
 
 async function updateBrandrisk() {
+  setLayerState('brandrisk', 'loading')
   try {
-    const res = await fetch('/api/brandrisk')
-    if (!res.ok) return
+    const res = await fetch('/api/brandrisk', { signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) throw new Error('API HTTP ' + res.status)
     const data = await res.json()
     const points = (data?.points ?? []).filter((p) => brandriskStep(p) >= 0)
     if (brandriskLayer) map.removeLayer(brandriskLayer)
@@ -769,31 +796,29 @@ async function updateBrandrisk() {
     const halos = points.map((p) => L.circle([p.lat, p.lon], brandriskHaloStyle(p)))
     const cores = points.map((p) => L.circle([p.lat, p.lon], brandriskCoreStyle(p)))
     const dots = points.map((p) => L.circleMarker([p.lat, p.lon], brandriskDotStyle(p))
-      .bindPopup(() => brandriskPopup(p), { className: 'strike-popup' }))
+      .bindPopup(() => brandriskPopup(p), { className: 'strike-popup', autoPan: false }))
     brandriskLayer = L.layerGroup([...halos, ...cores, ...dots])
     if (brandriskVisible) brandriskLayer.addTo(map)
+    setLayerState('brandrisk', points.length ? 'ready' : 'empty')
   } catch (e) {
+    setLayerState('brandrisk', brandriskLayer ? 'stale' : 'error')
     console.warn('Brandrisk fetch failed:', e)
   }
 }
 
 function toggleBrandrisk() {
   brandriskVisible = !brandriskVisible
-  const btn = document.getElementById('brandrisk-toggle')
-  const legend = document.getElementById('brandrisk-legend')
-  if (brandriskVisible) {
-    if (brandriskLayer) brandriskLayer.addTo(map)
-    btn.classList.add('active')
-    if (legend) legend.classList.remove('hidden')
-  } else {
-    if (brandriskLayer) map.removeLayer(brandriskLayer)
-    btn.classList.remove('active')
-    if (legend) legend.classList.add('hidden')
+  if (brandriskLayer) {
+    if (brandriskVisible) brandriskLayer.addTo(map)
+    else map.removeLayer(brandriskLayer)
   }
+  setLayerEnabled('brandrisk', brandriskVisible)
+  document.getElementById('brandrisk-legend').hidden = !brandriskVisible
 }
 
 // --- Boot ---
 initMap()
+setupMapUI(map)
 loadFromStorage()
 initGeolocation()
 connectToServer()
@@ -810,23 +835,18 @@ setInterval(updateWind, 10 * 60_000)
 setInterval(updateFires, 15 * 60_000)
 setInterval(updateBrandrisk, 30 * 60_000)
 window.addEventListener('beforeunload', saveToStorage)
-document.getElementById('radar-toggle').addEventListener('click', toggleRadar)
-document.getElementById('radar-toggle').classList.add('active')
-document.getElementById('wind-toggle').addEventListener('click', toggleWind)
-document.getElementById('wind-toggle').classList.add('active')
-document.getElementById('fires-toggle').addEventListener('click', toggleFires)
-document.getElementById('brandrisk-toggle').addEventListener('click', toggleBrandrisk)
-document.getElementById('layer-toggle').addEventListener('click', (e) => {
-  e.stopPropagation()
-  document.getElementById('layer-menu').classList.toggle('hidden')
+for (const [id, enabled, toggle] of [
+  ['radar', radarVisible, toggleRadar], ['wind', windVisible, toggleWind],
+  ['fires', firesVisible, toggleFires], ['brandrisk', brandriskVisible, toggleBrandrisk],
+]) {
+  document.getElementById(`${id}-toggle`).addEventListener('click', toggle)
+  setLayerEnabled(id, enabled)
+}
+document.getElementById('motion-note').hidden = !reducedMotion.matches
+reducedMotion.addEventListener('change', () => {
+  document.getElementById('motion-note').hidden = !reducedMotion.matches
+  if (reducedMotion.matches && windVisible) toggleWind()
 })
-document.querySelectorAll('.layer-option').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    setMapLayer(btn.dataset.layer)
-    document.getElementById('layer-menu').classList.add('hidden')
-  })
-})
-document.addEventListener('click', (e) => {
-  const wrap = document.querySelector('.layer-select-wrap')
-  if (!wrap.contains(e.target)) document.getElementById('layer-menu').classList.add('hidden')
+document.querySelectorAll('input[name=basemap]').forEach(input => {
+  input.addEventListener('change', () => { if (input.checked) setMapLayer(input.value) })
 })

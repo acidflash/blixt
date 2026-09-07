@@ -122,11 +122,21 @@ Top-right panel shows two side-by-side gradient bars (⚡ Blitzortung + SMHI) wi
 - Knapp `⚠️ Brandrisk` i `#map-controls` + egen legend (`#brandrisk-legend`): gradientbar, siffror 1–6, och en andra rad med "Liten risk"/"Extrem risk" så innebörden syns utan att hovra. Visas/döljs med lagret. Avstängt som standard.
 - Uppdateras var 30:e minut.
 
-### Map control buttons
+### Responsive map interface
 
-- "💨 Vind", "🌧 Radar", "🔥 Bränder" and "⚠️ Brandrisk" live in `#map-controls` (flex row, bottom-right)
-- Shared class `.map-ctrl-btn`; `.active` = blue highlight
-- "🌧 Radar" and "💨 Vind" default to active/visible on load — Bränder and Brandrisk default off (less central to the core lightning use case) and must be toggled on manually
+- `src/map-ui.js` owns responsive panels, focus handling, layer status labels and popup fitting. Visual tokens and layout rules live in `src/style.css`; approved design context is in `PRODUCT.md` and `DESIGN.md`.
+- Compact layout activates at width <=900px **or** height <=500px. Bottom buttons **Lager** and **Förklaring** open mutually exclusive non-modal panels (max 45dvh, internally scrollable). Escape restores focus; outside interaction closes the panel.
+- Desktop keeps weather controls bottom-right, explanation top-right and connection status at the top. ResizeObserver reserves space for attribution and panels, including safe-area insets.
+- Basemaps use native radios. Weather buttons expose `aria-pressed`, `aria-busy` and text for loading, empty, ready, failed and stale data. Zoom, location and popup close controls have 44px minimum targets.
+- Radar and Wind are enabled initially; reduced-motion users start with Wind off and may explicitly enable it. Strike/pulse effects honor reduced motion.
+- Server history is labelled **Ansluten till servern**, without claiming the upstream feed is live. Location failures appear in the interface and can be retried using Min position.
+- Popups use `autoPan: false`; `map-ui.js` fits their rendered bounds into available map space after resize/zoom to avoid overlapping controls.
+
+### Tests
+
+- `npm test` runs the Node regression tests for strike ingestion, validation and reconnection.
+- `npm run test:ui` builds the app and runs Chromium GUI tests with controlled weather data. It serves a temporary local static server without starting upstream polling. Screenshot paths are printed by the test run.
+- GUI tests use `/snap/bin/chromium` by default; set `BROWSER_PATH` to another installed Chromium executable when needed. Real map tiles require a separate network smoke check.
 
 ### Other features
 

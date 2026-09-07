@@ -1,15 +1,15 @@
 import express from 'express'
+import { MAX_AGE_MS, StrikeStore, isValidStrike } from './shared/strikes.js'
 import { createServer } from 'http'
 import { WebSocketServer, WebSocket as NodeWS } from 'ws'
 import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'fs'
 
 const app = express()
-const httpServer = createServer(app)
+export const httpServer = createServer(app)
 const PORT = process.env.PORT ?? 80
 const DATA_FILE = process.env.DATA_FILE ?? '/data/strikes.json'
-const MAX_AGE_MS = 3 * 60 * 60 * 1000
 const SMHI_BASE = 'https://opendata-download-lightning.smhi.se/api/version/latest'
 const FIRMS_MAP_KEY = process.env.FIRMS_MAP_KEY
 const FIRMS_SOURCE = 'VIIRS_SNPP_NRT'
@@ -70,24 +70,22 @@ app.get('/api/stats', (_req, res) => {
 app.use(express.json({ limit: '2mb' }))
 app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), 'dist')))
 
-let strikes = []
+const strikes = new StrikeStore()
 try {
   const now = Date.now()
-  strikes = JSON.parse(readFileSync(DATA_FILE, 'utf8'))
-    .filter(s => now - s.timeMs < MAX_AGE_MS)
-  console.log(`Loaded ${strikes.length} strikes from disk`)
+  for (const strike of JSON.parse(readFileSync(DATA_FILE, 'utf8'))) strikes.add(strike, now)
+  console.log(`Loaded ${strikes.size} strikes from disk`)
 } catch {}
 
 function cleanup() {
-  const cutoff = Date.now() - MAX_AGE_MS
-  strikes = strikes.filter(s => s.timeMs > cutoff)
+  strikes.prune()
 }
 
 function save() {
   cleanup()
   try {
     mkdirSync(dirname(DATA_FILE), { recursive: true })
-    writeFileSync(DATA_FILE, JSON.stringify(strikes))
+    writeFileSync(DATA_FILE, JSON.stringify([...strikes.values()]))
   } catch (e) {
     console.error('Save error:', e.message)
   }
@@ -98,7 +96,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' })
 
 wss.on('connection', (ws) => {
   cleanup()
-  ws.send(JSON.stringify({ type: 'history', strikes }))
+  ws.send(JSON.stringify({ type: 'history', strikes: [...strikes.values()] }))
   ws.on('error', () => {})
 })
 
@@ -111,23 +109,20 @@ function broadcast(strike) {
 
 // --- Unified strike ingestion ---
 function ingest(lat, lon, timeMs, meta = {}) {
-  if (Date.now() - timeMs > MAX_AGE_MS) return
-  if (strikes.some(s => s.timeMs === timeMs && s.lat === lat && s.lon === lon)) return
-  const strike = { lat, lon, timeMs, meta }
-  strikes.push(strike)
-  broadcast(strike)
+  const strike = strikes.add({ lat, lon, timeMs, meta })
+  if (strike) broadcast(strike)
+  return strike
 }
 
 // --- REST API (keep for backward compat + health checks) ---
 app.get('/api/strikes', (_req, res) => {
   cleanup()
-  res.json(strikes)
+  res.json([...strikes.values()])
 })
 
 app.post('/api/strikes', (req, res) => {
+  if (!isValidStrike(req.body)) return res.sendStatus(400)
   const { lat, lon, timeMs, meta } = req.body
-  if (typeof lat !== 'number' || typeof lon !== 'number' || typeof timeMs !== 'number')
-    return res.sendStatus(400)
   ingest(lat, lon, timeMs, meta ?? {})
   res.sendStatus(204)
 })
@@ -157,9 +152,9 @@ const BLITZ_URLS = [
 ]
 let blitzIdx = 0
 
-function connectBlitzortung() {
+export function connectBlitzortung(WebSocket = NodeWS) {
   const url = BLITZ_URLS[blitzIdx % BLITZ_URLS.length]
-  const ws = new NodeWS(url)
+  const ws = new WebSocket(url)
 
   ws.on('open', () => {
     ws.send('{"a":111}')
@@ -180,18 +175,14 @@ function connectBlitzortung() {
   ws.on('close', () => {
     blitzIdx++
     console.log('[Blitzortung] frånkopplad, återansluter…')
-    setTimeout(connectBlitzortung, 3000)
+    setTimeout(() => connectBlitzortung(WebSocket), 3000)
   })
 
-  ws.on('error', () => {
-    blitzIdx++
-    setTimeout(connectBlitzortung, 3000)
-  })
+  // ws emits close after error; reconnect only there to avoid duplicate relays.
+  ws.on('error', () => {})
 }
 
 // --- SMHI polling ---
-const smhiSeen = new Set()
-
 function smhiToMs(s) {
   return Date.UTC(s.year, s.month - 1, s.day, s.hours, s.minutes, s.seconds, Math.floor(s.nanoseconds / 1e6))
 }
@@ -222,11 +213,7 @@ async function pollSmhi() {
     for (const s of raw) {
       const timeMs = smhiToMs(s)
       if (timeMs < cutoff) continue
-      const key = `${timeMs}:${s.lat}:${s.lon}`
-      if (smhiSeen.has(key)) continue
-      smhiSeen.add(key)
-      ingest(s.lat, s.lon, timeMs, { source: 'smhi', cloudIndicator: s.cloudIndicator, peakCurrent: s.peakCurrent })
-      added++
+      if (ingest(s.lat, s.lon, timeMs, { source: 'smhi', cloudIndicator: s.cloudIndicator, peakCurrent: s.peakCurrent })) added++
     }
   }
   if (added > 0) console.log(`[SMHI] +${added} slag`)
@@ -474,17 +461,20 @@ app.get('/api/wind', (_req, res) => {
 })
 
 // --- Boot ---
-connectBlitzortung()
-pollSmhi()
-pollFires()
-pollBrandrisk()
-pollWind()
-setInterval(pollSmhi, 60_000)
-setInterval(pollFires, 30 * 60_000)
-setInterval(pollBrandrisk, 30 * 60_000)
-setInterval(pollWind, 30 * 60_000)
-setInterval(save, 60_000)
-setInterval(saveVisitors, 60_000)
-process.on('SIGTERM', () => { save(); saveVisitors(); process.exit(0) })
+// Importing the server for local tests must not start upstream polling.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  connectBlitzortung()
+  pollSmhi()
+  pollFires()
+  pollBrandrisk()
+  pollWind()
+  setInterval(pollSmhi, 60_000)
+  setInterval(pollFires, 30 * 60_000)
+  setInterval(pollBrandrisk, 30 * 60_000)
+  setInterval(pollWind, 30 * 60_000)
+  setInterval(save, 60_000)
+  setInterval(saveVisitors, 60_000)
+  process.on('SIGTERM', () => { save(); saveVisitors(); process.exit(0) })
 
-httpServer.listen(PORT, () => console.log(`Blixt på :${PORT}`))
+  httpServer.listen(PORT, () => console.log(`Blixt på :${PORT}`))
+}

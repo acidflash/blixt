@@ -13,6 +13,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY server.js .
+COPY shared ./shared
 VOLUME /data
 EXPOSE 80
 CMD ["node", "server.js"]
